@@ -11,7 +11,7 @@ Montgomery is wired to work with
 SQLAlchemy_, but nothing prevents it to
 work on other structured data.
 
-.. SQLALchemy: http://www.sqlalchemy.org/
+.. SQLAlchemy: http://www.sqlalchemy.org/
 
 The way to choose the fields to serialize is implemented by another
 class, the walker. Right now, the only walker we provide is one that
