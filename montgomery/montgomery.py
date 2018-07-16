@@ -515,14 +515,9 @@ class SQLAWalker:
 
     """
 
-    def __init__(self, source_factory : TypeSupportFactory = None, dest_factory : TypeSupportFactory = None, logger = default_logger):
-
-        assert (source_factory == dest_factory == None) or \
-            (source_factory and dest_factory and source_factory != dest_factory), "Serializing from one type to itself doesn't make sense"
+    def __init__(self, logger = default_logger):
 
         self._logger = logger
-        self.source_factory = source_factory
-        self.dest_factory = dest_factory
         self.serializers = {}
 
         # self._all_type_supports = set()
@@ -772,7 +767,7 @@ class SQLAWalker:
 
         for name in fields_control: # Bug! this should look at relations only
             if (name not in relations) and (name not in single_rnames) and (name not in fields_names):
-                raise Exception("The relation or field {}.{} you talk about doesn't exist. We know of {}; {}".format(base_type.__name__, name, relations.keys(), single_rnames.keys()))
+                raise Exception("The relation or field {}.{} you use in a field control doesn't exist. We know these : {}.".format( base_type.__name__, name, ','.join( list(relations.keys()) + list(single_rnames.keys()))))
 
 
         # --- RELATIONS represented as single item ----------------------------
@@ -832,9 +827,9 @@ class SQLAWalker:
                     if "relation" not in rel_to_walk[name]:
                         rel_to_walk[name]["relation"] = v
                 else:
-                    raise Exception("Unsupported type in fields controls : {}".format( fields_control[name]))
+                    raise Exception("The relation field '{}' for '{}' has a field control ({}) but I don't understand it.".format( name, base_type.__name__, fields_control[name]))
             else:
-                raise Exception("Don't know how to serialize {}.{} because there's no field control for it.".format( base_type.__name__, name))
+                raise Exception("Don't know how to serialize {}.{} because you didn't specify a field control for it.".format( base_type.__name__, name))
 
 
 
@@ -889,8 +884,28 @@ class SQLAWalker:
         return serializer
 
 
+class CodeGenQuick:
+    def __init__(self, source_factory : TypeSupportFactory,
+                 dest_factory : TypeSupportFactory,
+                 walker,
+                 logger = default_logger):
 
+        assert (source_factory == dest_factory == None) or \
+            (source_factory and dest_factory and source_factory != dest_factory), "Serializing from one type to itself doesn't make sense"
 
+        self._logger = logger
+        self.source_factory = source_factory
+        self.dest_factory = dest_factory
+        self.serializers = {}
+        self.walker = walker
+
+    def make_serializer( self, base_type, fields_control, serializer_name : str = None):
+        source_type_support = self.source_factory.get_type_support( base_type)
+        dest_type_support = self.dest_factory.get_type_support( base_type)
+
+        s = self.walker.walk( source_type_support, base_type,
+                              dest_type_support, fields_control)
+        return s
 
 
 def generated_code( serializers) -> str:

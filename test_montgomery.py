@@ -2,7 +2,7 @@ import unittest
 from unittest import skip
 from pprint import pprint
 
-from montgomery.montgomery import SQLAWalker, SKIP, generated_code, TypeSupportFactory
+from montgomery.montgomery import SQLAWalker, SKIP, generated_code, TypeSupportFactory, CodeGenQuick
 from montgomery.type_support import DictTypeSupport, SQLATypeSupport
 
 
@@ -157,9 +157,15 @@ class Test(unittest.TestCase):
 
     def test_factories(self):
 
-        sqla_factory = TypeSupportFactory( SQLATypeSupport )
-        dict_factory = TypeSupportFactory( DictTypeSupport )
-        w = SQLAWalker( sqla_factory, dict_factory)
+        cgq = CodeGenQuick( TypeSupportFactory( SQLATypeSupport ),
+                            TypeSupportFactory( DictTypeSupport ),
+                            SQLAWalker())
+
+        cgq.make_serializer( Order,
+                             {'parts' : cgq.make_serializer( OrderPart, { 'order' : SKIP })})
+
+
+        return
 
         a = { Order : {},
               OrderPart : { 'order' : SKIP } }
