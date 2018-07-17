@@ -57,4 +57,3 @@ Montgomery is called like that because there was a great field
 marshal (pun totally intended).
 
 .. image:: Bernard_Law_Montgomery2.jpg
-   :width: 150
