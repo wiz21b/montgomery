@@ -63,6 +63,7 @@ class Test(unittest.TestCase):
 
         session.commit()
 
+    @skip
     def test_happy(self):
         w = SQLAWalker()
 
@@ -161,45 +162,19 @@ class Test(unittest.TestCase):
                             TypeSupportFactory( DictTypeSupport ),
                             SQLAWalker())
 
-        cgq.make_serializer( Order,
-                             {'parts' : cgq.make_serializer( OrderPart, { 'order' : SKIP })})
+        # cgq.make_serializer( Order,
+        #                      {'parts' : cgq.make_serializer( OrderPart, { 'order' : SKIP })})
 
+        print("/////////////////////////////////////////")
+        s = cgq.make_serializers( { Order : {},
+                                    OrderPart : { 'order' : SKIP }
+        } )
+        print( s )
 
-        return
-
-        a = { Order : {},
-              OrderPart : { 'order' : SKIP } }
-
-        # figure out the topmost nodes
-
-        nodes = []
-        topmost_nodes = [n for n in nodes]
-
-        for node in nodes:
-            children = get_children( node)
-            for c in children:
-                if c in topmost_nodes:
-                    topmost_nodes.remove(c)
-
-
-
-        def find_order( todo, traversal):
-            # traversal : a list of node, in the order of the traversal
-            if not todo:
-                return found
-            else:
-                node = todo[0]
-                children = get_children( node)
-
-                if node not in traversal:
-                    for c in children:
-                        if c in traversal:
-                            travesral.remove(c)
-
-                    traversal.extend( children.extend(node) )
-                else:
-                    # If node was added
-                    pass
+        gencode = generated_code( s.values() )
+        print(gencode)
+        self.executed_code = dict()
+        exec( compile( gencode, "<string>", "exec"), self.executed_code)
 
 
 

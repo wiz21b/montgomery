@@ -842,7 +842,7 @@ class SQLAWalker:
 
 
             # The relation is expected to be denoted by the same name
-            # in both the source and the destination, but thtat's just a
+            # in both the source and the destination, but that's just a
             # sane convention. So we give the possiblity to rename.
 
             assert isinstance(relation, Serializer)
@@ -906,6 +906,53 @@ class CodeGenQuick:
         s = self.walker.walk( source_type_support, base_type,
                               dest_type_support, fields_control)
         return s
+
+    def make_serializers( self, models_fc):
+
+        serializers = dict()
+        do_now = dict(models_fc)
+        do_later = dict()
+        stop = False
+
+        self._logger.debug("WASASASASASAASASASASASASASAS")
+        while do_now or do_later:
+
+            serializers_made = False
+            for base_type, fields_control in do_now.items():
+                fc = dict(fields_control)
+                ftypes, rnames, single_rnames, knames = sqla_attribute_analysis( base_type)
+
+                has_unsatisfied_deps = False
+                for relation_name in rnames:
+                    if relation_name in fields_control and fields_control[relation_name] == SKIP:
+                        continue
+
+                    relation = getattr( base_type, relation_name)
+                    relation_target = inspect(relation).mapper.class_
+                    self._logger.debug("Relation {} of tpye {}".format( relation_name, relation_target))
+                    if relation_target not in serializers:
+                        has_unsatisfied_deps = True
+                        break
+                    else:
+                        fc[relation_name] = serializers[relation_target]
+
+
+                if has_unsatisfied_deps:
+                    do_later[base_type] = fields_control
+                else:
+                    serializers[base_type] = self.make_serializer( base_type, fc)
+                    serializers_made = True
+
+
+            if not serializers_made:
+                raise Exception("I'm stuck")
+
+            stop = len(do_later) == 0
+            do_now = do_later
+            do_later = dict()
+
+        return serializers
+
 
 
 def generated_code( serializers) -> str:
