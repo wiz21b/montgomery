@@ -8,7 +8,11 @@ default_logger.addHandler(logging.StreamHandler())
 default_logger.setLevel(logging.DEBUG)
 
 
-
+def merge_dicts(x, y):
+    """Given two dicts, merge them into a new dict as a shallow copy."""
+    z = x.copy()
+    z.update(y)
+    return z
 
 class CodeWriter:
     def __init__(self):
@@ -415,6 +419,7 @@ class TypeSupportFactory(AbstractTypeSupportFactory):
         self._type_support_class = type_support_class
 
     def make_type_support(self, base_type):
+        self._logger.debug("TypeSupportFactory : trying to make a '{}' with a '{}'".format(self._type_support_class, base_type))
         return self._type_support_class( base_type)
 
 
@@ -733,23 +738,12 @@ class SQLAWalker:
         serializer.append_code("# Copy key fields")
         self._field_copy( serializer, source_type_support, source_instance, dest_type_support, dest_instance, knames)
 
-        # When writing to a an instance I, we make sure the I
-        # we write, will be a "short" one if I equals another instance
-        # which was already serialized. By short, we mean we write
-        # something that contains just enough information to
-        # receonstruct the real thing while deserializing.
-        # IOW, when we have the same object appearing several
-        # times during the serialisation we make sure we serialize
-        # it completely the first time and we serialize a shortcut
-        # to it the other times.
-
-        dest_type_support.cache_on_write( serializer, knames, source_type_support, "source",
-                                          make_cache_base_name(source_type_support, dest_type_support), "dest")
 
 
         serializer.append_blank()
         serializer.append_code("# Copy non-key fields")
         self._field_copy( serializer, source_type_support, source_instance, dest_type_support, dest_instance, fields_to_copy)
+
 
 
         # --- INSTANCE CHECK --------------------------------------------------
@@ -760,6 +754,22 @@ class SQLAWalker:
 
 
         dest_type_support.check_instance_serializer( serializer, "dest")
+
+
+        # When writing to a an instance I, we make sure the I
+        # we write, will be a "short" one if I equals another instance
+        # which was already serialized. By short, we mean we write
+        # something that contains just enough information to
+        # receonstruct the real thing while deserializing.
+        # IOW, when we have the same object appearing several
+        # times during the serialisation we make sure we serialize
+        # it completely the first time and we serialize a shortcut
+        # to it the other times.
+
+        dest_type_support.cache_on_write( serializer,
+                                          knames, source_type_support, "source",
+                                          make_cache_base_name(source_type_support, dest_type_support), "dest")
+
 
         source_type_support.cache_on_read_update( serializer, "dest")
 
@@ -774,7 +784,7 @@ class SQLAWalker:
 
         for relation_name in single_rnames:
 
-            if relation_name in fields_control and fields_control[relation_name] != SKIP:
+            if (relation_name not in fields_control) or fields_control[relation_name] != SKIP:
                 serializer.append_code('# Relation {} (single)'.format(relation_name))
 
                 relation_serializer = fields_control[relation_name]
@@ -808,7 +818,7 @@ class SQLAWalker:
                 serializer.indent_left()
 
             else:
-                serializer.append_code('# Skipped single relation {}'.format(relation_name))
+                serializer.append_code("# Skipped single relation '{}'".format(relation_name))
 
         # --- RELATIONS represented as sequence -------------------------------
 
@@ -910,20 +920,27 @@ class CodeGenQuick:
     def make_serializers( self, models_fc):
 
         serializers = dict()
+
+        for base_type, fields_control in models_fc.items():
+            source_type_support = self.source_factory.get_type_support( base_type)
+            dest_type_support = self.dest_factory.get_type_support( base_type)
+            serializers[base_type] =  Serializer( source_type_support, base_type.__name__, dest_type_support)
+
         do_now = dict(models_fc)
         do_later = dict()
         stop = False
 
-        self._logger.debug("WASASASASASAASASASASASASASAS")
         while do_now or do_later:
 
+            dbg_missing_deps = []
             serializers_made = False
             for base_type, fields_control in do_now.items():
                 fc = dict(fields_control)
                 ftypes, rnames, single_rnames, knames = sqla_attribute_analysis( base_type)
 
+
                 has_unsatisfied_deps = False
-                for relation_name in rnames:
+                for relation_name in merge_dicts( rnames, single_rnames):
                     if relation_name in fields_control and fields_control[relation_name] == SKIP:
                         continue
 
@@ -931,8 +948,11 @@ class CodeGenQuick:
                     relation_target = inspect(relation).mapper.class_
                     self._logger.debug("Relation {} of tpye {}".format( relation_name, relation_target))
                     if relation_target not in serializers:
+                        dbg_missing_deps.append( "{}.{}".format( base_type.__name__, relation_name))
                         has_unsatisfied_deps = True
-                        break
+                        # I could break, but I let it go so that
+                        # the missing deps array is completely built,
+                        # which in turn will improve error reporting.
                     else:
                         fc[relation_name] = serializers[relation_target]
 
@@ -945,7 +965,10 @@ class CodeGenQuick:
 
 
             if not serializers_made:
-                raise Exception("I'm stuck")
+                self._logger.debug( "serializers : {}".format(str( serializers)))
+                self._logger.debug( "to do next  : {}".format( str( do_later)))
+                self._logger.debug( "missing deps: {}".format( dbg_missing_deps))
+                raise Exception("Don't know what to do with these fields : {}.".format( ", ".join( sorted( dbg_missing_deps))))
 
             stop = len(do_later) == 0
             do_now = do_later
