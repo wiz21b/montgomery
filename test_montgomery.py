@@ -158,20 +158,20 @@ class Test(unittest.TestCase):
 
     def test_factories(self):
 
-        cgq = CodeGenQuick( TypeSupportFactory( SQLATypeSupport ),
-                            TypeSupportFactory( DictTypeSupport ),
-                            SQLAWalker())
+        model_and_field_controls = { Order : {},
+                                     OrderPart : { 'order' : SKIP } }
 
-        # cgq.make_serializer( Order,
-        #                      {'parts' : cgq.make_serializer( OrderPart, { 'order' : SKIP })})
+        sqla_factory = TypeSupportFactory( SQLATypeSupport )
+        dict_factory = TypeSupportFactory( DictTypeSupport )
+        walker = SQLAWalker()
 
-        print("/////////////////////////////////////////")
-        s = cgq.make_serializers( { Order : {},
-                                    OrderPart : { 'order' : SKIP }
-        } )
-        print( s )
+        cgq = CodeGenQuick( sqla_factory, dict_factory, walker)
+        s1 = cgq.make_serializers( model_and_field_controls)
 
-        gencode = generated_code( s.values() )
+        cgq = CodeGenQuick( dict_factory, sqla_factory,  walker)
+        s2 = cgq.make_serializers( model_and_field_controls)
+
+        gencode = generated_code( list(s1.values()) + list(s2.values()) )
         print(gencode)
         self.executed_code = dict()
         exec( compile( gencode, "<string>", "exec"), self.executed_code)

@@ -49,8 +49,6 @@ def gen_merge_relation_sqla(serializer : Serializer,
     assert isinstance(rel_source_type_support, TypeSupport)
     assert isinstance(rel_dest_type_support, SQLATypeSupport), "This merge operation will merge *to* some SQLA relations *only*"
 
-    serializer.append_code("# From {} to {}".format( rel_source_type_support, rel_dest_type_support))
-
     # To accomplish the merge operation, we will analyse the key-tuples
     # of each object in the source and destination relation.
     # The question is : how do we determine the key tuples. Shall
@@ -151,8 +149,9 @@ class SQLATypeSupport(TypeSupport):
 
     def check_instance_serializer(self, serializer, dest : str):
         # check if key is not empty
-        serializer.append_code( "# Merging into SQLA session")
-        serializer.append_code( "# SQLA will copy the field values (efficiently)")
+        serializer.append_code( "# Merging into SQLA session. We do that after")
+        serializer.append_code( "# having filled all the fields so that")
+        serializer.append_code( "# SQLA will copy them efficiently")
         serializer.append_code( "{} = session.merge({})".format( dest, dest))
 
     def gen_global_code(self) -> CodeWriter:
@@ -264,24 +263,8 @@ class SQLATypeSupport(TypeSupport):
         return "SQLATypeSupport[{}]".format( self.type_name())
 
 
-    def cache_on_read( self, serializer : Serializer, knames,
-                            source_instance_name : str,
-                            cache_base_name : str):
 
 
-        serializer.append_code("# read-cache: SQLATypeSupport")
-        serializer.append_code("# Caching is more for reusing instances than performances.")
-        serializer.append_code("cache_key = id(source) # source is not hashable")
-        serializer.append_code("if cache_key in cache:")
-        serializer.indent_right()
-        serializer.append_code(    "# We have already deserialized '{}'".format( source_instance_name))
-        serializer.append_code(    "return cache[cache_key]".format( source_instance_name))
-        serializer.indent_left()
-
-
-
-    def cache_on_read_update( self, serializer : Serializer, dest_instance_name : str):
-        serializer.append_code(    "cache[cache_key] = {}".format( dest_instance_name))
 
 
 
@@ -334,64 +317,16 @@ class DictTypeSupport(TypeSupport):
     # def add_line(self, line):
     #     self._lines.append(line)
 
+    def cache_key( self, serializer : Serializer, key_var : str, source_instance_name : str, cache_base_name : str, knames):
 
-    def cache_on_read( self, serializer : Serializer, knames,
-                            source_instance_name : str,
-                            cache_base_name : str):
-
-        """ Used when creating object *out of* an object 'source_instance_name'
-        of a type represented by this TypeSupport. A cache is assumed to
-        be maintained that connect source's object keys to their already
-        serialized counterparts.
-
-        The cache_base_name
-        is used to denote families of objets, it will be added to the key
-        used to read the cache.
-
-        The principle is : we assume the source object to be a "short" representation
-        of an actual object. This short representation has enough information to
-        query the cache. We'll query the cache and return what's inside
-        if there something inside.
-        """
-        #serializer.insert_code("    global cache",1)
-
-
-
-        serializer.append_code("# read-cache: Dict")
-        serializer.append_code("# Caching is more for reusing instances than performances.")
-        serializer.append_code("cache_key = {}".format(
-             make_cache_key_expression( knames, cache_base_name, self, source_instance_name)))
-        serializer.append_code("if any( cache_key[1:]):")
+        serializer.append_code("{} = {}".format(
+            key_var,
+            make_cache_key_expression( knames, cache_base_name, self, source_instance_name)))
+        serializer.append_code("if not any( {}[1:]):".format( key_var))
         serializer.indent_right()
-
-        serializer.append_code("if cache_key in cache:")
-        serializer.indent_right()
-        serializer.append_code(    "# We have already deserialized '{}'".format( source_instance_name))
-        serializer.append_code(    "return cache[cache_key]".format( source_instance_name))
-        serializer.indent_left()
-        serializer.indent_left()
-        return
-
-        serializer.append_code("# read-cache: Dict")
-        serializer.append_code("# Caching is more for reusing instances than performances.")
-
-        serializer.append_code("cache_key = {}".format(
-             make_cache_key_expression( knames, cache_base_name, self, source_instance_name)))
-        # serializer.append_code("cache_key = {}".format(  source_instance_name))
-        serializer.append_code("if any( cache_key[1:]):")
-        # serializer.append_code("if destination is None:")
-        serializer.indent_right()
-        serializer.append_code("if cache_key in cache:")
-        serializer.indent_right()
-        serializer.append_code(    "# We have already deserialized '{}'".format( source_instance_name))
-        serializer.append_code(    "return cache[cache_key]".format( source_instance_name))
-        serializer.indent_left()
+        serializer.append_code("{} = None".format( key_var))
         serializer.indent_left()
 
-    def cache_on_read_update( self, serializer : Serializer, dest_instance_name : str):
-        return
-
-        serializer.append_code(    "cache[cache_key] = {}".format( dest_instance_name))
 
 
 
@@ -617,19 +552,11 @@ class ObjectTypeSupport(TypeSupport):
         return
 
 
-    def cache_on_read( self, serializer : Serializer, knames,
-                            source_instance_name : str,
-                            cache_base_name : str):
+    def cache_key_expression( self, source_instance_name : str, cache_base_name : str):
+
+        return "({},id({}))".format( cache_base_name, source_instance_name)
 
 
-        serializer.append_code("# read-cache: Object")
-        serializer.append_code("# Caching is more for reusing instances than performances.")
-        serializer.append_code("cache_key = id(source) # source is not hashable")
-        serializer.append_code("if cache_key in cache:")
-        serializer.indent_right()
-        serializer.append_code(    "# We have already deserialized '{}'".format( source_instance_name))
-        serializer.append_code(    "return cache[cache_key]".format( source_instance_name))
-        serializer.indent_left()
 
 
     def cache_on_write(self, serializer, knames, source_type_support, source_instance_name, cache_base_name, dest_instance_name):

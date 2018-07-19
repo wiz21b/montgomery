@@ -21,19 +21,17 @@ frameworks because it is made to generate code instead of providing
 "ready to use" functionality. So there are two steps : generate
 serializer code, load code, serialize objects with the code.
 
-The difficult step is the first one, generate code as there is
-some architecture to understand and some parameters to figure out.
+The difficult step is the first one : generate code. This requires a
+bit of understanding of the architecture of montgomery.  There are two
+important classes :
 
-The idea is this. There are two important classes :
-
-* the ``TypeSupport`` whose job is to provide code fragments
-  that will read/write/update an object of a given type
-  (say, a dict, a SQLA objects)
+* the ``TypeSupport`` whose job is to provide code fragments that will
+  read/write/update an object of a given type (say, a dict, a SQLA
+  objects)
 * the ``Walker`` whose job is to guide the creation of full blown
-  serializer according to "map" which is given by a model
-  object (in its current state, Montgomery is only able
-  to "walk" SQLA mappers, but you could imagine it to
-  walk an XSD or anything suitable).
+  serializer according to "map" which is given by a model object (in
+  its current state, Montgomery is only able to "walk" SQLA mappers,
+  but you could imagine it to walk an XSD or anything suitable).
 
 For example, to generate a serializer that converts a representation
 of an Order from a dict to an object, you'll define a TypeSupport for
@@ -43,9 +41,8 @@ to read from the dict, and the other to generate code to write to an
 object).  Finally, you'll execute the walker which will produce the
 code.
 
-A cool consequence of that is that you can mostly transform
-a serializer in to a deserializer just by exchanging both
-the TypeSupports.
+A cool consequence of that is that you can transform a serializer in
+to a deserializer just by exchanging both the TypeSupports.
 
 Montgomery provides some tooling to allow you to create
 Walkers and TypeSupports easily in case you have many
