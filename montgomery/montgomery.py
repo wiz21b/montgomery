@@ -109,7 +109,7 @@ class TypeSupport:
     def check_instance_serializer( self, serializer : 'Serializer', dest_instance_name : str):
         pass
 
-    def cache_key( self, serializer : 'Serializer', key_var : str, source_instance_name : str, cache_base_name : str, knames):
+    def cache_key( self, serializer : 'Serializer', key_var : str, source_instance_name : str, cache_base_name : str):
         """ Builds code to compute the key that will be used
         to cache serialization results. If the results must
         not be cached (once or never), the generated expression
@@ -122,8 +122,13 @@ class TypeSupport:
         serializer.append_code( "{} = (\"{}\", id({}))".format( key_var, cache_base_name, source_instance_name))
 
 
-    def cache_on_write(self, serializer : 'Serializer', knames, source_type_support, source_instance_name, cache_base_name, dest_instance_name):
-        pass
+    def cache_on_write(self, serializer : 'Serializer', source_type_support, source_instance_name, cache_base_name, dest_instance_name):
+
+        # Default implementation, may not work for every
+        # scenarios (see DictTypeSupport for example).
+
+        serializer.append_code("cache[cache_key] = {}".format( dest_instance_name))
+
 
 
     def relation_copy(self, serializer : 'Serializer', source_instance_name : str, dest_instance_name : str, relation_name,
@@ -712,8 +717,7 @@ class SQLAWalker:
         serializer.append_blank()
         serializer.append_code("# Caching is more for reusing instances and prevent refrence cycles than speed.")
         source_type_support.cache_key( serializer, "cache_key", "source",
-                                       make_cache_base_name(source_type_support, dest_type_support),
-                                       knames)
+                                       make_cache_base_name(source_type_support, dest_type_support),)
         serializer.append_code("if (cache_key is not None) and (cache_key in cache):")
         serializer.indent_right()
         serializer.append_code(    "# We have already transformed 'source'")
@@ -785,7 +789,7 @@ class SQLAWalker:
         serializer.append_code("# We update the cache before calling other serializers.")
         serializer.append_code("# This will protect us against circular references.")
         dest_type_support.cache_on_write( serializer,
-                                          knames, source_type_support, "source",
+                                          source_type_support, "source",
                                           make_cache_base_name(source_type_support, dest_type_support), "dest")
 
 

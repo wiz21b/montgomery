@@ -5,28 +5,7 @@ from sqlalchemy.inspection import inspect
 
 from montgomery.montgomery  import default_logger, TypeSupport, Serializer, CodeWriter, sqla_attribute_analysis
 
-def make_cache_value_expression( key_fields, type_support : TypeSupport, instance_name):
-    parts = []
-    for k_name in key_fields:
-        parts.append( "'{}' : {}".format(
-            k_name, type_support.gen_read_field( instance_name, k_name)))
 
-    return "{{ {} }}".format( ",".join( parts))
-
-def make_cache_key_expression( key_fields, cache_base_name, type_support : TypeSupport, instance_name):
-    assert type(key_fields) == list and len(key_fields) > 0, "Wrong keys : {}".format( key_fields)
-    assert isinstance( type_support, TypeSupport)
-    assert type(instance_name) == str and len(instance_name) > 0
-
-    key_parts_extractors = [ "'{}'".format(cache_base_name)]
-    for k_name in key_fields:
-        key_parts_extractors.append( type_support.gen_read_field( instance_name, k_name))
-
-    return "({})".format( ",".join(key_parts_extractors))
-
-    return "'{}{}'.format({})".format( cache_base_name,
-                                   "_{}" * len(key_parts_extractors),
-                                   ",".join( key_parts_extractors))
 
 
 def gen_merge_relation_sqla(serializer : Serializer,
@@ -236,8 +215,8 @@ class SQLATypeSupport(TypeSupport):
                       serializer_call_code,
                       walk_type):
 
-        serializer.append_code("# ------ relation : {} ------".format(relation_name))
-        serializer.append_code("")
+        serializer.append_blank()
+        serializer.append_code("# Copy relation '{}'".format(relation_name))
         relation_source_expr = source_ts.gen_read_relation( source_instance_name,relation_name)
         relation_dest_expr = dest_ts.gen_read_relation( dest_instance_name,relation_name)
 
@@ -268,12 +247,6 @@ class SQLATypeSupport(TypeSupport):
 
 
 
-    def cache_on_write(self, serializer, knames, source_type_support, source_instance_name, cache_base_name, dest_instance_name):
-
-        serializer.append_code("# write-cache: SQLATypeSupport")
-        serializer.append_code("cache[cache_key] = {}".format( dest_instance_name))
-
-        return
 
 
 
@@ -313,70 +286,6 @@ class DictTypeSupport(TypeSupport):
         dict.
         """
         return "{}['{}']".format(expression, field_name)
-
-    # def add_line(self, line):
-    #     self._lines.append(line)
-
-    def cache_key( self, serializer : Serializer, key_var : str, source_instance_name : str, cache_base_name : str, knames):
-
-        serializer.append_code("{} = {}".format(
-            key_var,
-            make_cache_key_expression( knames, cache_base_name, self, source_instance_name)))
-        serializer.append_code("if not any( {}[1:]):".format( key_var))
-        serializer.indent_right()
-        serializer.append_code("{} = None".format( key_var))
-        serializer.indent_left()
-
-
-
-
-    def cache_on_write(self, serializer, knames, source_type_support, source_instance_name, cache_base_name, dest_instance_name):
-
-        """ Avoid to write several time the same dict.
-        We do that by only writing the key portion of a dict that we
-        have already written.
-
-        We do this by filling the dest dict ("dest") with only its key
-        information. That is, when we arrive in this function, the dest
-        dict must be filled with key information but only with that.
-        If we "cache" the result, then we'll prematurely return the
-        dest dict, with only the keys. If e don't cache, we let the
-        serilaization run with the rest of the data to be put in the
-        dest dict.
-
-        """
-
-        #serializer.insert_code("    global cache",1)
-
-        # serializer.append_code("cache_key = {} # {}".format(
-        #     make_cache_key_expression( knames, cache_base_name, source_type_support, source_instance_name),
-        #     str(source_type_support)))
-
-        # The any(...) expression makes sure that if we
-        # serialize two new instances, one won't be
-        # taken for the other (because both have (None, None,...)
-        # key tuple)
-
-        serializer.append_code("# write-cache: Dict")
-        serializer.append_code("cache[cache_key] = {}".format(
-            make_cache_value_expression( knames, source_type_support, source_instance_name) ))
-
-        return
-
-        # serializer.append_code("if destination is None:")
-        # serializer.indent_right()
-        # serializer.append_code("if source in cache:")
-        # serializer.indent_right()
-        # serializer.append_code(    "# Source was already serialized to a dict, so")
-        # serializer.append_code(    "# return a short version that dict")
-        # serializer.append_code(    "return {}".format(dest_instance_name))
-        # serializer.indent_left()
-        # serializer.append_code("else:")
-        # serializer.indent_right()
-        # serializer.append_code(    "cache[ source] = {}".format(dest_instance_name))
-        # serializer.indent_left()
-        # serializer.indent_left()
-
 
 
     def gen_write_field(self, instance, field, value):
@@ -552,16 +461,47 @@ class ObjectTypeSupport(TypeSupport):
         return
 
 
-    def cache_key_expression( self, source_instance_name : str, cache_base_name : str):
-
-        return "({},id({}))".format( cache_base_name, source_instance_name)
 
 
 
 
-    def cache_on_write(self, serializer, knames, source_type_support, source_instance_name, cache_base_name, dest_instance_name):
 
-        serializer.append_code("# write-cache: Object")
-        serializer.append_code("cache[cache_key] = {}".format( dest_instance_name))
 
-        return
+class SQLADictTypeSupport(DictTypeSupport):
+
+    def __init__(self, base_type = None):
+        ftypes, rnames, single_rnames, self._key_names = sqla_attribute_analysis( base_type)
+
+    def cache_key( self, serializer : Serializer, key_var : str, source_instance_name : str, cache_base_name : str):
+        serializer.append_code("{} = {}".format(
+            key_var,
+            self._make_cache_key_expression( self._key_names, cache_base_name, self, source_instance_name)))
+        serializer.append_code("if not any( {}[1:]):".format( key_var))
+        serializer.indent_right()
+        serializer.append_code("{} = None".format( key_var))
+        serializer.indent_left()
+
+    def cache_on_write(self, serializer, source_type_support, source_instance_name, cache_base_name, dest_instance_name):
+        serializer.append_code("cache[cache_key] = {}".format(
+            self._make_cache_value_expression( self._key_names, source_type_support, source_instance_name) ))
+
+
+    def _make_cache_value_expression( self, key_fields, type_support : TypeSupport, instance_name):
+        parts = []
+        for k_name in key_fields:
+            parts.append( "'{}' : {}".format(
+                k_name, type_support.gen_read_field( instance_name, k_name)))
+
+        return "{{ {} }}".format( ",".join( parts))
+
+
+    def _make_cache_key_expression( self, key_fields, cache_base_name, type_support : TypeSupport, instance_name):
+        assert type(key_fields) == list and len(key_fields) > 0, "Wrong keys : {}".format( key_fields)
+        assert isinstance( type_support, TypeSupport)
+        assert type(instance_name) == str and len(instance_name) > 0
+
+        key_parts_extractors = [ "'{}'".format(cache_base_name)]
+        for k_name in key_fields:
+            key_parts_extractors.append( type_support.gen_read_field( instance_name, k_name))
+
+        return "({})".format( ",".join(key_parts_extractors))

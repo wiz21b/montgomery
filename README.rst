@@ -12,6 +12,10 @@ to work on other structured data.
 
 .. _SQLAlchemy: http://www.sqlalchemy.org/
 
+How to serialize
+----------------
+
+
 
 General architecture
 --------------------

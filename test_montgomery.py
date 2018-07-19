@@ -3,7 +3,7 @@ from unittest import skip
 from pprint import pprint
 
 from montgomery.montgomery import SQLAWalker, SKIP, generated_code, TypeSupportFactory, CodeGenQuick
-from montgomery.type_support import DictTypeSupport, SQLATypeSupport
+from montgomery.type_support import SQLADictTypeSupport, SQLATypeSupport
 
 
 from sqlalchemy import MetaData, Integer, ForeignKey, Date, Column, Float, String, create_engine
@@ -162,15 +162,18 @@ class Test(unittest.TestCase):
                                      OrderPart : { 'order' : SKIP } }
 
         sqla_factory = TypeSupportFactory( SQLATypeSupport )
-        dict_factory = TypeSupportFactory( DictTypeSupport )
+        dict_factory = TypeSupportFactory( SQLADictTypeSupport )
         walker = SQLAWalker()
 
+        # Build serializers to serialize from SQLA objects to dicts
         cgq = CodeGenQuick( sqla_factory, dict_factory, walker)
         s1 = cgq.make_serializers( model_and_field_controls)
 
+        # Build serializers to serialize in the reverse direction
         cgq = CodeGenQuick( dict_factory, sqla_factory,  walker)
         s2 = cgq.make_serializers( model_and_field_controls)
 
+        # Generate the code and compile it
         gencode = generated_code( list(s1.values()) + list(s2.values()) )
         print(gencode)
         self.executed_code = dict()
