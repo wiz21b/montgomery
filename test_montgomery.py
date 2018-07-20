@@ -14,6 +14,14 @@ from sqlalchemy.orm import sessionmaker, backref, relationship
 metadata = MetaData()
 MapperBase = declarative_base(metadata=metadata)
 
+class Operation(MapperBase):
+    __tablename__ = 'operations'
+
+    operation_id = Column('operation_id',Integer,autoincrement=True,nullable=False,primary_key=True)
+
+    name = Column('name',String,nullable=False)
+
+
 class Order(MapperBase):
     __tablename__ = 'orders'
 
@@ -33,6 +41,12 @@ class OrderPart(MapperBase):
     order_id = Column('order_id',Integer,ForeignKey( Order.order_id),nullable=False)
     name = Column('name',String,nullable=False)
 
+    operation_id = Column('operation_id',Integer,ForeignKey( Operation.operation_id),nullable=False)
+    operation = relationship(Operation, uselist=False)
+
+
+
+
 
 engine = create_engine("sqlite:///:memory:")
 MapperBase.metadata.create_all(engine)
@@ -46,6 +60,11 @@ class Test(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
 
+        op = Operation()
+        op.operation_id = 12
+        op.name = "lazer cutting"
+        session.add(op)
+
         o = Order()
         o.hourly_cost = 1.23
         session.add(o)
@@ -55,11 +74,13 @@ class Test(unittest.TestCase):
         p.name = "Part One"
         p.order_id = o.order_id
         o.parts.append(p)
+        p.operation = op
 
         p = OrderPart()
         p.name = "Part Two"
         session.add(p)
         o.parts.append(p)
+        p.operation = op
 
         session.commit()
 
@@ -159,6 +180,7 @@ class Test(unittest.TestCase):
     def test_factories(self):
 
         model_and_field_controls = { Order : {},
+                                     Operation : {},
                                      OrderPart : { 'order' : SKIP } }
 
         sqla_factory = TypeSupportFactory( SQLATypeSupport )
@@ -179,7 +201,9 @@ class Test(unittest.TestCase):
         self.executed_code = dict()
         exec( compile( gencode, "<string>", "exec"), self.executed_code)
 
-
+        o = session.query(Order).first()
+        serialized = self.executed_code['serialize_Order_Order_to_dict']( o, None)
+        pprint( serialized)
 
 
 if __name__ == "__main__":

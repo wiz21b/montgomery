@@ -468,40 +468,79 @@ class ObjectTypeSupport(TypeSupport):
 
 
 class SQLADictTypeSupport(DictTypeSupport):
+    """A DictTypeSupport that is tailored to work with SQLAlchemy's entities.
+
+    The challenge we solve here is this. When converting from entities
+    to dicts, if the same entity appears more than once, then we don't
+    want to have as manyy dicts representing the same entity. What we
+    want is to have one dict as a serialization of the entity
+    and as many "shortcuts" dicts to represent it in a short form.
+
+    Let's take an example. We have 3 orders (entity Order, with
+    primary key order_id, relationship to Customer) and one customer
+    (entity Customer, pk customer_id). In that case, when we'll
+    serialize the orders, we'll have :
+
+    * order 1 : { order_id:1, customer_id : 1, customer : { customer_id:10, name : "OnoSendai"}}
+    * order 2 : { order_id:2, customer_id : 1, customer : { customer_id:10}}
+    * order 3 : { order_id:3, customer_id : 1, customer : { customer_id:10}}
+
+    So we spare the name fields (and any other).
+
+    Doesn't work. Serilialize three orders which are linked to 2 new customers :
+    * order 1 : { order_id:1, customer_id : None, customer : { customer_id:None, name : "OnoSendai"}}
+    * order 2 : { order_id:2, customer_id : None, customer : { customer_id:None, name : "TessierAshpool"}}
+    * order 3 : { order_id:1, customer_id : None, customer : { customer_id:None}}
+
+    what is the customer of the third order OnoSendai or TessierAshpool ? Even if I do :
+    * order 1 : { order_id:1, customer_id : None, customer : { customer_id:None, name : "OnoSendai"}}
+    * order 2 : { order_id:2, customer_id : None, customer : { customer_id:None, name : "TessierAshpool"}}
+    * order 3 : { order_id:1, customer_id : None, customer : { customer_id:None, name : "OnoSendai"}}
+
+    I Still have the problem that the same customer will appear twice, I won't be able
+    to figure out there are only 2 Customers...
+
+    So the easiest way to do that is to attribute a special key to
+    every object we serialize to dict. One could think about using the
+    actual business key (like the primary key for SQLA entities), but
+    that's not a good idea because in case of brand new objects, that
+    key may not be initialized, and therefore, if we have 3 new
+    objects of one type, then they'll have 3 times the same business
+    key, and therefore, they'll be undistinguishable.
+    """
 
     def __init__(self, base_type = None):
         ftypes, rnames, single_rnames, self._key_names = sqla_attribute_analysis( base_type)
 
     def cache_key( self, serializer : Serializer, key_var : str, source_instance_name : str, cache_base_name : str):
-        serializer.append_code("{} = {}".format(
+        serializer.append_code("{} = {}['__CACHE__']".format(
             key_var,
-            self._make_cache_key_expression( self._key_names, cache_base_name, self, source_instance_name)))
-        serializer.append_code("if not any( {}[1:]):".format( key_var))
-        serializer.indent_right()
-        serializer.append_code("{} = None".format( key_var))
-        serializer.indent_left()
+            source_instance_name))
+        return
+
 
     def cache_on_write(self, serializer, source_type_support, source_instance_name, cache_base_name, dest_instance_name):
-        serializer.append_code("cache[cache_key] = {}".format(
-            self._make_cache_value_expression( self._key_names, source_type_support, source_instance_name) ))
+        serializer.append_code( "{}['__CACHE__'] = id({})".format( dest_instance_name, source_instance_name))
+        serializer.append_code( "cache[cache_key] = {{ '__CACHE__' : id({}) }}".format(source_instance_name))
+        return
 
 
-    def _make_cache_value_expression( self, key_fields, type_support : TypeSupport, instance_name):
-        parts = []
-        for k_name in key_fields:
-            parts.append( "'{}' : {}".format(
-                k_name, type_support.gen_read_field( instance_name, k_name)))
+    # def _make_cache_value_expression( self, key_fields, type_support : TypeSupport, instance_name):
+    #     parts = []
+    #     for k_name in key_fields:
+    #         parts.append( "'{}' : {}".format(
+    #             k_name, type_support.gen_read_field( instance_name, k_name)))
 
-        return "{{ {} }}".format( ",".join( parts))
+    #     return "{{ {} }}".format( ",".join( parts))
 
 
-    def _make_cache_key_expression( self, key_fields, cache_base_name, type_support : TypeSupport, instance_name):
-        assert type(key_fields) == list and len(key_fields) > 0, "Wrong keys : {}".format( key_fields)
-        assert isinstance( type_support, TypeSupport)
-        assert type(instance_name) == str and len(instance_name) > 0
+    # def _make_cache_key_expression( self, key_fields, cache_base_name, type_support : TypeSupport, instance_name):
+    #     assert type(key_fields) == list and len(key_fields) > 0, "Wrong keys : {}".format( key_fields)
+    #     assert isinstance( type_support, TypeSupport)
+    #     assert type(instance_name) == str and len(instance_name) > 0
 
-        key_parts_extractors = [ "'{}'".format(cache_base_name)]
-        for k_name in key_fields:
-            key_parts_extractors.append( type_support.gen_read_field( instance_name, k_name))
+    #     key_parts_extractors = [ "'{}'".format(cache_base_name)]
+    #     for k_name in key_fields:
+    #         key_parts_extractors.append( type_support.gen_read_field( instance_name, k_name))
 
-        return "({})".format( ",".join(key_parts_extractors))
+    #     return "({})".format( ",".join(key_parts_extractors))

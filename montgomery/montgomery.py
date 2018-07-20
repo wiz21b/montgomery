@@ -381,11 +381,11 @@ class Serializer(CodeWriter):
 
         make_instance = self.destination_type_support.make_instance_code("destination")
         if make_instance:
-            self.append_code(    "if destination is None:")
+            self.append_code( "if destination is None:")
             self.indent_right()
-            self.append_code(        "dest = {}".format( make_instance))
+            self.append_code(    "dest = {}".format( make_instance))
             self.indent_left()
-            self.append_code(    "else:")
+            self.append_code( "else:")
             self.indent_right()
             self.append_code(    "dest = destination")
             self.indent_left()
@@ -967,7 +967,7 @@ class CodeGenQuick:
                     relation_target = inspect(relation).mapper.class_
                     self._logger.debug("Relation {} of tpye {}".format( relation_name, relation_target))
                     if relation_target not in serializers:
-                        dbg_missing_deps.append( "{}.{}".format( base_type.__name__, relation_name))
+                        dbg_missing_deps.append( "{}.{} of type {}".format( base_type.__name__, relation_name, relation_target.__name__))
                         has_unsatisfied_deps = True
                         # I could break, but I let it go so that
                         # the missing deps array is completely built,
@@ -987,7 +987,7 @@ class CodeGenQuick:
                 self._logger.debug( "serializers : {}".format(str( serializers)))
                 self._logger.debug( "to do next  : {}".format( str( do_later)))
                 self._logger.debug( "missing deps: {}".format( dbg_missing_deps))
-                raise Exception("Don't know what to do with these fields : {}.".format( ", ".join( sorted( dbg_missing_deps))))
+                raise Exception("Don't know what to do with these fields : {}. Did you give all mappers ?".format( ", ".join( sorted( dbg_missing_deps))))
 
             stop = len(do_later) == 0
             do_now = do_later
