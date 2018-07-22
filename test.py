@@ -1,10 +1,10 @@
+import io
 import unittest
 from unittest import skip
 from pprint import pprint, PrettyPrinter
 
 from pyxfer.pyxfer import SQLAWalker, SKIP, generated_code, TypeSupportFactory, CodeGenQuick
 from pyxfer.type_support import SQLADictTypeSupport, SQLATypeSupport
-
 
 from sqlalchemy import MetaData, Integer, ForeignKey, Date, Column, Float, String, create_engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -55,6 +55,32 @@ session = Session()
 
 
 
+def rename_ids( d, new_id):
+
+    if type(d) == dict:
+        if SQLADictTypeSupport.ID_TAG in d:
+            id_value = d[SQLADictTypeSupport.ID_TAG]
+
+            if id_value in new_id:
+                d[SQLADictTypeSupport.ID_TAG] = new_id[id_value]
+            else:
+                new_id[id_value] = len(new_id)
+                d[SQLADictTypeSupport.ID_TAG] = new_id[id_value]
+
+        for key in sorted( d.keys()):
+            rename_ids( d[key], new_id)
+
+    elif type(d) == list:
+        for entry in d:
+            rename_ids( entry, new_id)
+
+    return d
+
+def canonize_dict( d : dict):
+    rename_ids( d, dict())
+    s = io.StringIO()
+    PrettyPrinter(stream=s).pprint( d)
+    return s.getvalue()
 
 class Test(unittest.TestCase):
     @classmethod
@@ -219,34 +245,32 @@ class Test(unittest.TestCase):
         serialized = self.executed_code['serialize_Order_Order_to_dict']( o, None)
 
 
-        result = {'__CACHE__': 32729776,
-                  'cost': 0.0,
-                  'order_id': 1,
-                  'parts': [{'__CACHE__': 32703536,
-                             'name': 'Part One',
-                             'operation': {'__CACHE__': 32730928,
-                                           'name': 'lazer cutting',
-                                           'operation_id': 12},
-                             'operation_id': 12,
-                             'order_id': 1,
-                             'order_part_id': 1},
-                            {'__CACHE__': 32703728,
-                             'name': 'Part Two',
-                             'operation': {'__CACHE__': 32730928},
-                             'operation_id': 12,
-                             'order_id': 1,
-                             'order_part_id': 2}],
-                  'start_date': None}
-        import io
-        s = io.StringIO()
-        PrettyPrinter(stream=s).pprint( serialized)
-        print( s.getvalue())
-        s = io.StringIO()
-        PrettyPrinter(stream=s).pprint( result)
-        print( s.getvalue())
+        ID = SQLADictTypeSupport.ID_TAG
+        expected = { ID: 32729776,
+                     'cost': 0.0,
+                     'order_id': 1,
+                     'parts': [{ID: 32703536,
+                                'name': 'Part One',
+                                'operation': {ID: 32730928,
+                                              'name': 'lazer cutting',
+                                              'operation_id': 12},
+                                'operation_id': 12,
+                                'order_id': 1,
+                                'order_part_id': 1},
+                               {ID: 32703728,
+                                'name': 'Part Two',
+                                'operation': {ID: 32730928},
+                                'operation_id': 12,
+                                'order_id': 1,
+                                'order_part_id': 2}],
+                     'start_date': None}
 
+        r = canonize_dict( expected)
+        s = canonize_dict( serialized)
 
-        assert str(serialized)  == str()
+        print(r)
+
+        assert r == s
 
 if __name__ == "__main__":
 

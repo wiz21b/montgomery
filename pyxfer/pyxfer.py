@@ -717,7 +717,7 @@ class SQLAWalker:
 
 
         serializer.append_blank()
-        serializer.append_code("# Caching is more for reusing instances and prevent refrence cycles than speed.")
+        serializer.append_code("# Caching is more for reusing instances and prevent reference cycles than speed.")
         source_type_support.cache_key( serializer, "cache_key", "source",
                                        make_cache_base_name(source_type_support, dest_type_support),)
         serializer.append_code("if (cache_key is not None) and (cache_key in cache):")
