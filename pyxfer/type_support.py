@@ -310,7 +310,7 @@ class DictTypeSupport(TypeSupport):
         return "{}['{}']".format(instance, relation_name)
 
     def gen_is_single_relation_present(self, instance, relation_name) -> str:
-        return f"('{relation_name}' in {instance} and {instance}['{relation_name}'] is not None)"
+        return "('{}' in {} and {}['{}'] is not None)".format(relation_name, instance, instance, relation_name)
 
     def relation_copy(self, serializer, source_instance_name, dest_instance_name, relation_name,
                       source_ts, dest_ts,
@@ -515,10 +515,24 @@ class SQLADictTypeSupport(DictTypeSupport):
         ftypes, rnames, single_rnames, self._key_names = sqla_attribute_analysis( base_type)
 
     def cache_key( self, serializer : Serializer, key_var : str, source_instance_name : str, cache_base_name : str):
+        # Compute cache key out of a dict
+
+        cke = self._make_cache_key_expression( self._key_names, cache_base_name, self, source_instance_name)
+
+        serializer.append_code("zulu = {}".format(cke))
+        serializer.append_code("if any( zulu[1:]):")
+        serializer.indent_right()
+        serializer.append_code("{} = {}".format(
+            key_var,
+            cke))
+        serializer.indent_left()
+        serializer.append_code("else:")
+        serializer.indent_right()
         serializer.append_code("{} = {}['{}']".format(
             key_var,
             source_instance_name,
             self.ID_TAG))
+        serializer.indent_left()
 
     def cache_on_write(self, serializer, source_type_support, source_instance_name, cache_base_name, dest_instance_name):
         serializer.append_code( "{}['{}'] = id({})".format( dest_instance_name, self.ID_TAG, source_instance_name))
@@ -534,13 +548,13 @@ class SQLADictTypeSupport(DictTypeSupport):
     #     return "{{ {} }}".format( ",".join( parts))
 
 
-    # def _make_cache_key_expression( self, key_fields, cache_base_name, type_support : TypeSupport, instance_name):
-    #     assert type(key_fields) == list and len(key_fields) > 0, "Wrong keys : {}".format( key_fields)
-    #     assert isinstance( type_support, TypeSupport)
-    #     assert type(instance_name) == str and len(instance_name) > 0
+    def _make_cache_key_expression( self, key_fields, cache_base_name, type_support : TypeSupport, instance_name):
+        assert type(key_fields) == list and len(key_fields) > 0, "Wrong keys : {}".format( key_fields)
+        assert isinstance( type_support, TypeSupport)
+        assert type(instance_name) == str and len(instance_name) > 0
 
-    #     key_parts_extractors = [ "'{}'".format(cache_base_name)]
-    #     for k_name in key_fields:
-    #         key_parts_extractors.append( type_support.gen_read_field( instance_name, k_name))
+        key_parts_extractors = [ "'{}'".format(cache_base_name)]
+        for k_name in key_fields:
+            key_parts_extractors.append( type_support.gen_read_field( instance_name, k_name))
 
-    #     return "({})".format( ",".join(key_parts_extractors))
+        return "({})".format( ",".join(key_parts_extractors))
