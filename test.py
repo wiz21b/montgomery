@@ -53,6 +53,11 @@ MapperBase.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 session = Session()
 
+def print_code( gencode : str):
+    lines = gencode.split("\n")
+    for i in range( 1, len( lines)):
+        lines[i] = "{:5}: {}".format(i, lines[i])
+    print( "\n".join( lines) )
 
 
 def rename_ids( d, new_id):
@@ -83,6 +88,7 @@ def canonize_dict( d : dict):
     return s.getvalue()
 
 class Test(unittest.TestCase):
+
     @classmethod
     def setUpClass(cls):
 
@@ -110,7 +116,7 @@ class Test(unittest.TestCase):
 
         session.commit()
 
-    @skip
+    #@skip
     def test_happy(self):
         w = SQLAWalker()
 
@@ -123,7 +129,8 @@ class Test(unittest.TestCase):
 
         # We'll serialize to dict, so we use another
         # type support for that.
-        dict_ts = DictTypeSupport()
+        order_dts = SQLADictTypeSupport( Order)
+        order_part_dts = SQLADictTypeSupport( OrderPart)
 
         # Build the serializers. Note that in case of relationship,
         # they must be wired together with the "field_control"
@@ -139,10 +146,10 @@ class Test(unittest.TestCase):
         # dicts, fields names will become keys)
 
         # The SKIP avoids some infinite recursion
-        order_part_ser = w.walk( order_part_ts, OrderPart, dict_ts,
-                                 fields_control= { 'order' : SKIP})
+        order_part_ser = w.walk( order_part_ts, OrderPart, order_part_dts,
+                                 fields_control= { 'order' : SKIP, 'operation' : SKIP})
 
-        order_ser = w.walk( order_ts, Order, dict_ts,
+        order_ser = w.walk( order_ts, Order, order_dts,
                             fields_control= { 'parts' : order_part_ser})
 
         # Finally, we can generate the code
@@ -151,7 +158,7 @@ class Test(unittest.TestCase):
         # It is very useful to read the generated code. We do
         # lots of efforts to make it clear (you can skip the caching
         # stuff first, because it's a bit trickier).
-        print(gencode)
+        print_code(gencode)
 
         # Oce you have the code, you can compile/exec it
         # like this or simply save it and import it when needed.
@@ -178,14 +185,14 @@ class Test(unittest.TestCase):
         # Note that you if you use factories, this code can
         # be shared quite a lot.
 
-        order_part_unser = w.walk( dict_ts, OrderPart, order_part_ts,
-                                   fields_control= { 'order' : SKIP})
+        order_part_unser = w.walk( order_part_dts, OrderPart, order_part_ts,
+                                   fields_control= { 'order' : SKIP, 'operation' : SKIP})
 
-        order_unser = w.walk( dict_ts, Order, order_ts,
+        order_unser = w.walk( order_dts, Order, order_ts,
                               fields_control= { 'parts' : order_part_unser})
 
         gencode = generated_code( [order_part_unser, order_unser] )
-        print(gencode)
+        print_code(gencode)
         self.executed_code = dict()
         exec( compile( gencode, "<string>", "exec"), self.executed_code)
 
@@ -232,10 +239,10 @@ class Test(unittest.TestCase):
         cgq = CodeGenQuick( dict_factory, sqla_factory,  walker)
         s2 = cgq.make_serializers( model_and_field_controls)
 
-        # Generate the code and compile it
+        # Generate the code of the seriliazers and compile it
 
         gencode = generated_code( list(s1.values()) + list(s2.values()) )
-        print(gencode)
+        print_code(gencode)
         self.executed_code = dict()
         exec( compile( gencode, "<string>", "exec"), self.executed_code)
 
@@ -245,30 +252,36 @@ class Test(unittest.TestCase):
         serialized = self.executed_code['serialize_Order_Order_to_dict']( o, None)
 
 
-        ID = SQLADictTypeSupport.ID_TAG
-        expected = { ID: 32729776,
-                     'cost': 0.0,
-                     'order_id': 1,
-                     'parts': [{ID: 32703536,
-                                'name': 'Part One',
-                                'operation': {ID: 32730928,
-                                              'name': 'lazer cutting',
-                                              'operation_id': 12},
-                                'operation_id': 12,
-                                'order_id': 1,
-                                'order_part_id': 1},
-                               {ID: 32703728,
-                                'name': 'Part Two',
-                                'operation': {ID: 32730928},
-                                'operation_id': 12,
-                                'order_id': 1,
-                                'order_part_id': 2}],
-                     'start_date': None}
+        # This is the expected result. Note the optimisation we do
+        # for the "operation" value. The first time it appears, we
+        # we give its full value (a normal recursion). But when it
+        # appears a second time, we limit ourselves to a key that
+        # identifies the previous full value. This way, we won't
+        # replicate a dict that appears several times in the serilisation.
+        # That's useful when many objects refer to a few other ones.
+        # In our case, many order parts were refering to a small
+        # set of well defined operations.
+
+        expected = {'cost': 0.0,
+                    'order_id': 1,
+                    'parts': [{'name': 'Part One',
+                               'operation': {'name': 'lazer cutting', 'operation_id': 12},
+                               'operation_id': 12,
+                               'order_id': 1,
+                               'order_part_id': 1},
+                              {'name': 'Part Two',
+                               'operation': {'operation_id': 12},
+                               'operation_id': 12,
+                               'order_id': 1,
+                               'order_part_id': 2}],
+                    'start_date': None}
 
         r = canonize_dict( expected)
         s = canonize_dict( serialized)
 
         print(r)
+        print("-"*80)
+        print(s)
 
         assert r == s
 

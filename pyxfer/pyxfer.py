@@ -806,7 +806,11 @@ class SQLAWalker:
 
         for relation_name in single_rnames:
 
-            if (relation_name not in fields_control) or fields_control[relation_name] != SKIP:
+            if relation_name not in fields_control:
+                raise Exception("Don't know how to serialize {}.{} because you didn't specify a field control for it.".format( base_type.__name__, relation_name))
+
+            # if (relation_name not in fields_control) or fields_control[relation_name] != SKIP:
+            if (relation_name in fields_control) and fields_control[relation_name] != SKIP:
                 serializer.append_code('# Relation {} (single)'.format(relation_name))
 
                 relation_serializer = fields_control[relation_name]

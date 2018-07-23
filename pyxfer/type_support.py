@@ -511,7 +511,7 @@ class SQLADictTypeSupport(DictTypeSupport):
 
     ID_TAG = "__MGYID__"
 
-    def __init__(self, base_type = None):
+    def __init__(self, base_type):
         ftypes, rnames, single_rnames, self._key_names = sqla_attribute_analysis( base_type)
 
     def cache_key( self, serializer : Serializer, key_var : str, source_instance_name : str, cache_base_name : str):
@@ -519,33 +519,50 @@ class SQLADictTypeSupport(DictTypeSupport):
 
         cke = self._make_cache_key_expression( self._key_names, cache_base_name, self, source_instance_name)
 
-        serializer.append_code("zulu = {}".format(cke))
-        serializer.append_code("if any( zulu[1:]):")
-        serializer.indent_right()
-        serializer.append_code("{} = {}".format(
-            key_var,
-            cke))
-        serializer.indent_left()
-        serializer.append_code("else:")
+        #serializer.append_code("zulu = {}".format(cke))
+        serializer.append_code("if '{}' in {}:".format( self.ID_TAG, source_instance_name))
         serializer.indent_right()
         serializer.append_code("{} = {}['{}']".format(
             key_var,
             source_instance_name,
             self.ID_TAG))
         serializer.indent_left()
+        serializer.append_code("else:")
+        serializer.indent_right()
+        serializer.append_code("{} = {}".format(
+            key_var,
+            cke))
+        serializer.indent_left()
 
     def cache_on_write(self, serializer, source_type_support, source_instance_name, cache_base_name, dest_instance_name):
-        serializer.append_code( "{}['{}'] = id({})".format( dest_instance_name, self.ID_TAG, source_instance_name))
+        cke = self._make_cache_key_expression( self._key_names, cache_base_name, source_type_support, source_instance_name)
+        serializer.append_code("zulu = {}".format(cke))
+
+        serializer.append_code("if any(zulu[1:]):")
+        serializer.indent_right()
+        serializer.append_code( "cache[cache_key] = {}".format(
+            self._make_cache_value_expression(
+                self._key_names, source_type_support, source_instance_name)))
+        serializer.indent_left()
+        serializer.append_code("else:")
+        serializer.indent_right()
         serializer.append_code( "cache[cache_key] = {{ '{}' : id({}) }}".format(self.ID_TAG, source_instance_name))
+        serializer.indent_left()
+
+        # serializer.append_code( "short_form = {}".format(
+        #     self._make_cache_value_expression(
+        #         self._key_names, source_type_support, source_instance_name)))
+        # serializer.append_code( "{}['{}'] = id({})".format( dest_instance_name, self.ID_TAG, source_instance_name))
+        # serializer.append_code( "cache[cache_key] = {{ '{}' : id({}) }}".format(self.ID_TAG, source_instance_name))
 
 
-    # def _make_cache_value_expression( self, key_fields, type_support : TypeSupport, instance_name):
-    #     parts = []
-    #     for k_name in key_fields:
-    #         parts.append( "'{}' : {}".format(
-    #             k_name, type_support.gen_read_field( instance_name, k_name)))
+    def _make_cache_value_expression( self, key_fields, type_support : TypeSupport, instance_name):
+        parts = []
+        for k_name in key_fields:
+            parts.append( "'{}' : {}".format(
+                k_name, type_support.gen_read_field( instance_name, k_name)))
 
-    #     return "{{ {} }}".format( ",".join( parts))
+        return "{{ {} }}".format( ",".join( parts))
 
 
     def _make_cache_key_expression( self, key_fields, cache_base_name, type_support : TypeSupport, instance_name):
