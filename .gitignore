@@ -1,0 +1,9 @@
+*~
+.*
+*.bak
+*.html
+.idea/*
+_vim*
+**/build/*
+dist/*
+**/__pycache__
