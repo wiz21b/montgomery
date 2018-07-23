@@ -69,7 +69,7 @@ def readme():
 
 # for the classifiers and metadata, see : https://packaging.python.org/
 setuptools.setup(
-    name= "montgomery",
+    name= "pyxfer",
     description="A serializer code generator (based on SQLAlchemy)",
     long_description=readme(),
     license="GNU Lesser General Public License v3 or later (LGPLv3+)",
@@ -78,7 +78,7 @@ setuptools.setup(
     author="Stefan Champailler",
     author_email="schampailler@skynet.be",
     python_requires='~=3.6',
-    packages=['montgomery'],
+    packages=['pyxfer'],
     install_requires=['sqlalchemy>=1.0.0, <1.1.0'],
     classifiers=['Programming Language :: Python :: 3.6',
                  'Development Status :: 3 - Alpha',

@@ -15,7 +15,9 @@ to work on other structured data.
 How to serialize
 ----------------
 
-Here's a small example::
+Here's a small example
+
+.. code-block:: python
 
         # First you describe which types will be
         # serialized (those are the "walked" ones)
