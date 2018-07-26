@@ -3,10 +3,18 @@ from datetime import datetime
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import ColumnProperty
 
-default_logger = logging.Logger("Montgomery")
-default_logger.addHandler(logging.StreamHandler())
-default_logger.setLevel(logging.DEBUG)
+def _make_default_logger() -> logging.Logger:
+    # Func to hide local values
+    default_logger = logging.getLogger( "pyxfer") # FIXME shoudl use __name__, but it returns pyxfer.pyxfer
+    log_handler = logging.StreamHandler()
+    log_handler.setFormatter( logging.Formatter("[%(name)s %(asctime)s %(levelname)s] %(message)s"))
+    default_logger.addHandler( log_handler)
+    default_logger.setLevel( logging.CRITICAL + 1) # Hides every logs by default
+    return default_logger
 
+# Use this to enable logging in a clean way :
+# logging.getLogger("pyxfer").setLevel(logging.DEBUG)
+_default_logger = _make_default_logger()
 
 def merge_dicts(x, y):
     """Given two dicts, merge them into a new dict as a shallow copy."""
@@ -84,7 +92,7 @@ class TypeSupport:
 
     """
 
-    def __init__( self, logger = default_logger):
+    def __init__( self, logger : logging.Logger = _default_logger):
         self._logger = logger
 
     def type(self) -> str:
@@ -402,8 +410,8 @@ class AbstractTypeSupportFactory:
     Note that we cache the Typesupport we create.
     """
 
-    def __init__(self, logger = default_logger):
-        self._logger = default_logger
+    def __init__(self, logger : logging.Logger = _default_logger):
+        self._logger = logger
         self._supported_types = []
         self._types_support = []
 
@@ -425,7 +433,7 @@ class AbstractTypeSupportFactory:
 
 class TypeSupportFactory(AbstractTypeSupportFactory):
 
-    def __init__( self, type_support_class : TypeSupport, logger = default_logger):
+    def __init__( self, type_support_class : TypeSupport, logger : logging.Logger = _default_logger):
         assert type( type_support_class) == type
         super().__init__( logger)
         self._type_support_class = type_support_class
@@ -436,7 +444,7 @@ class TypeSupportFactory(AbstractTypeSupportFactory):
 
 
 
-def sqla_attribute_analysis( model, logger = default_logger):
+def sqla_attribute_analysis( model, logger : logging.Logger = _default_logger):
     #default_logger.debug("Analysing model {}".format(model))
 
 
@@ -483,9 +491,6 @@ def sqla_attribute_analysis( model, logger = default_logger):
 
     return ( ftypes, rnames, single_rnames, knames)
 
-
-
-
 def make_cache_base_name( source_ts : TypeSupport, dest_ts : TypeSupport):
     return "{}_{}".format( source_ts.type_name(), dest_ts.type_name())
 
@@ -505,7 +510,10 @@ def make_cache_key_expression( key_fields, cache_base_name, type_support : TypeS
                                    ",".join( key_parts_extractors))
 
 
-def extract_sqla_key( base_type, type_support : TypeSupport, instance_name):
+def extract_sqla_key( base_type, type_support : TypeSupport, instance_name : str):
+    """
+    base_type : a SQLA mapper
+    """
 
     mapper = inspect( base_type)
     k_names = [k.name for k in mapper.primary_key]
@@ -532,7 +540,7 @@ class SQLAWalker:
 
     """
 
-    def __init__(self, logger = default_logger):
+    def __init__(self, logger : logging.Logger = _default_logger):
 
         self._logger = logger
         self.serializers = {}
@@ -565,34 +573,12 @@ class SQLAWalker:
 
             serializer.append_code(field_transfer)
 
-    # def register_serializer(self, s : Serializer):
-    #     serializer_id = (s.source_type_support, s.base_type_name, s.destination_type_support)
-    #     if serializer_id not in self._serializers_by_id:
-    #         self._serializers_by_id[serializer_id] = s
-    #     else:
-    #         raise Exception("twice register")
-
-    # def get_registered_serializer(self, s : TypeSupport, base_type_name:str, d : TypeSupport) -> Serializer:
-    #     serializer_id = (s, base_type_name, d)
-    #     if serializer_id in self._serializers_by_id:
-    #         return self._serializers_by_id[serializer_id]
-    #     else:
-    #         return None
-
-    # def register_type_support(self, ts : TypeSupport):
-    #     assert ts.type_name() not in self._registered_type_supports, "You have already registered a TypeSupport for {}".format(ts.type_name())
-
-    #     self._registered_type_supports[ ts.type_name()] = ts
 
     def gen_type_to_basetype_conversion(self, source_type, base_type):
         if source_type == String and base_type == str:
             return "{}".format
 
 
-    # def walk_types(self, src_type, walk_type, dest_type, fields_control = {}, serializer_name : str = None) -> Serializer:
-    #     source_type_support = self.source_factory.get_type_support( src_type)
-    #     dest_type_support = self.dest_factory.get_type_support( dest_type)
-    #     return self.walk(source_type_support, walk_type, dest_type_support)
 
     def walk(self, source_type_support : TypeSupport,
              base_type,
@@ -602,7 +588,16 @@ class SQLAWalker:
         """ Creates code to copy from a source type to a dest type.
         Actually creates a Serializer which will be able to produce the code.
         The base type is used to guide the walking process.
-        We recurse through the relations.
+        We *do not* recurse through the relations.
+
+        Fields controls indicate what to to with each field.
+        There are few possibilities :
+
+        * SKIP : the field won't be serialized at all.
+        * a Serializer object : the field will be serialized by calling
+          the provided serializer (remember serializer represents function).
+          In this case, the field is expected to be a (SQLAlhemy) relationship.
+
         """
 
         if source_type_support is None:
@@ -635,86 +630,7 @@ class SQLAWalker:
 
         # --- INSTANCE MANAGEMENT ---------------------------------------------
 
-        # When reading from a dict, we make sure that two dicts
-        # representing the same instance will be deserialized
-        # to only one instance (if we don't do that, then  2 dicts
-        # representing the same instance will be deserialized
-        # to two different instances).
-
-        # Two dicts represent the same instance if they have
-        # the same key entries (and those key entries are not None).
-
-        # In the case of two dicts representing the same thin,
-        # we can exploit the key stuff by storing one dict with
-        # all the data and the other dict with only the key.
-        # The second dictionary we'll have enough of the key to
-        # end up being wired to the object coming from the first dict.
-
-        # All of this comes from the way JSON serializes data.
-        # With JSON you can't have one dict shared between different
-        # locations, so there's some amount of replicaion.
-        # This doesn't occur in regular objects, or even regular
-        # dicts where an instance can be shared.
-
-        # So caching mechanisms are only necessary wwhen we build
-        # dicts that will be serialized to/from JSON.
-
-        # Caching is also assymetrical : you produce the smallest
-        # dict possible or you wire a big and a small one together.
-
-        # if isinstance( source_type_support, DictTypeSupport):
-        #     source_type_support.cache_dict_on_read( serializer, knames, "source",
-        #                         make_cache_base_name(source_type_support, dest_type_support))
-
-        # Handle caching
-
-        # Naively :
-        #    S(s) -> d
-        #    S-1(d) -> s
-
-        # Since S-1 behaves just like a S, we can just say S(s) -> d
-        # and add a very important property S(a) == S(b) <=> a == b
-
-        # Now, we need to optimize :
-        # S(s,C) -> d if s doesn't belong to C
-        # S(s,C) -> short(d) if s belongs to C
-        # and of course
-        # S( short(x), C) -> x
-
-        # S( s, C)                 -> (d, C+s)
-        # S( s, C+s)               -> (short(d), C+s)
-        # S( short(x), C+short(x)) -> (x, C+short(x))
-
-        # First time S is called : S(s) -> d
-        # Next time : S(s) -> short(d)
-        # and, conversely :
-        #    S-1(d) -> s
-        #    S-1( short(d)) -> s
-
-        # To represent the first/next call-, we introduct a cache (actually 2)
-
-        # S(s, C)            -> d  if s does not belongs to C, short(d) if s belongs to C
-        # S-1( d, C')        -> s  if d does not belong to C',
-        # S-1( short(d), C') -> s  if short(d) belong to C',
-
-        # Caching is done according to the following principles :
-        # If a source instance (S) has never been serialized before
-        # Then :
-        #  1. It is serialized to a destination instance D
-        #  2. It is written in a cache linking its primary key to
-        #     the result of the serialization (basically the destination
-        #     instance, let D).
-
-        # If S has been serialized before,
-        # then :
-        #  1. The result of the serialization is either what was written
-        #     in the cache, either a shortened version of it. By shortened
-        #     we mean an instance that contains enough data to be deserialized
-        #     (most likely the primary key which allows to find a deserialized
-        #     instance in the cache). The choice between writing a short or
-        #     complete version of the serialization is left to the TypeSupport
-        #     class.
-
+        # Caching
 
         serializer.append_blank()
         serializer.append_code("# Caching is more for reusing instances and prevent reference cycles than speed.")
@@ -726,8 +642,8 @@ class SQLAWalker:
         serializer.append_code(    "return cache[cache_key]")
         serializer.indent_left()
 
-
         # Create destination instance
+
         serializer.append_blank()
         serializer.append_code("# Check if new instance has to be created")
         serializer.instance_mgmt( knames, source_type_support, dest_type_support)
@@ -919,102 +835,18 @@ class SQLAWalker:
         return serializer
 
 
-class CodeGenQuick:
-    def __init__(self, source_factory : TypeSupportFactory,
-                 dest_factory : TypeSupportFactory,
-                 walker,
-                 logger = default_logger):
-
-        assert (source_factory == dest_factory == None) or \
-            (source_factory and dest_factory and source_factory != dest_factory), "Serializing from one type to itself doesn't make sense"
-
-        self._logger = logger
-        self.source_factory = source_factory
-        self.dest_factory = dest_factory
-        self.serializers = {}
-        self.walker = walker
-
-    def make_serializer( self, base_type, fields_control, serializer_name : str = None):
-        source_type_support = self.source_factory.get_type_support( base_type)
-        dest_type_support = self.dest_factory.get_type_support( base_type)
-
-        s = self.walker.walk( source_type_support, base_type,
-                              dest_type_support, fields_control)
-        return s
-
-    def make_serializers( self, models_fc):
-
-        serializers = dict()
-
-        for base_type, fields_control in models_fc.items():
-            source_type_support = self.source_factory.get_type_support( base_type)
-            dest_type_support = self.dest_factory.get_type_support( base_type)
-            serializers[base_type] =  Serializer( source_type_support, base_type.__name__, dest_type_support)
-
-        do_now = dict(models_fc)
-        do_later = dict()
-        stop = False
-
-        while do_now or do_later:
-
-            dbg_missing_deps = []
-            serializers_made = False
-            for base_type, fields_control in do_now.items():
-                fc = dict(fields_control)
-                ftypes, rnames, single_rnames, knames = sqla_attribute_analysis( base_type)
-
-
-                has_unsatisfied_deps = False
-                for relation_name in merge_dicts( rnames, single_rnames):
-                    if relation_name in fields_control and fields_control[relation_name] == SKIP:
-                        continue
-
-                    relation = getattr( base_type, relation_name)
-                    relation_target = inspect(relation).mapper.class_
-                    self._logger.debug("Relation {} of tpye {}".format( relation_name, relation_target))
-                    if relation_target not in serializers:
-                        dbg_missing_deps.append( "{}.{} of type {}".format( base_type.__name__, relation_name, relation_target.__name__))
-                        has_unsatisfied_deps = True
-                        # I could break, but I let it go so that
-                        # the missing deps array is completely built,
-                        # which in turn will improve error reporting.
-                    else:
-                        fc[relation_name] = serializers[relation_target]
-
-
-                if has_unsatisfied_deps:
-                    do_later[base_type] = fields_control
-                else:
-                    serializers[base_type] = self.make_serializer( base_type, fc)
-                    serializers_made = True
-
-
-            if not serializers_made:
-                self._logger.debug( "serializers : {}".format(str( serializers)))
-                self._logger.debug( "to do next  : {}".format( str( do_later)))
-                self._logger.debug( "missing deps: {}".format( dbg_missing_deps))
-                raise Exception("Don't know what to do with these fields : {}. Did you give all mappers ?".format( ", ".join( sorted( dbg_missing_deps))))
-
-            stop = len(do_later) == 0
-            do_now = do_later
-            do_later = dict()
-
-        return serializers
-
-
-
-def generated_code( serializers) -> str:
-    """ Generate the code hold in the serializers.
+def generated_code( serializers : list) -> str:
+    """ Generate the code held in the serializers.
     Call this once you've got all your serializer ready.
 
-    We generate code in a smart way (avoid code duplication etc.)
+    We generate code in a smart way (avoiding code duplication etc.)
     """
 
-    # Avoid code duplication
+    # Using set avoids code duplication
     type_supports = set(  [ s.source_type_support      for s in serializers])
     type_supports.update( [ s.destination_type_support for s in serializers] )
 
-    scode = [ "# Generated by Montgomery on {}".format( datetime.now()) ]
+    scode = [ "# Generated by Pyxfer on {}".format( datetime.now()) ]
 
     scode.append("cache = dict()")
 
@@ -1050,3 +882,125 @@ def generated_code( serializers) -> str:
         return "\n\n".join(scode)
     else:
         return ""
+
+
+
+class SQLAAutoGen:
+    """ This is a collection of methods that allows to set up
+    the code generation more easily.
+    """
+
+    def __init__(self, source_ts : TypeSupport,
+                 dest_ts : TypeSupport,
+                 walker : SQLAWalker,
+                 logger : logging.Logger = _default_logger):
+        """ The TypeSupport provided are expected to have
+        parameter-less constructors.
+        """
+
+        assert source_ts and dest_ts and source_ts != dest_ts, "Serializing from one type to itself doesn't make sense"
+
+        self._logger = logger
+
+        # We use TypeSupport factories to reuse instances of the TypeSupports
+        # This allows the type supports to generate code more
+        # efficiently (else they will generate the same code
+        # often).
+        self._ts_factories = dict()
+        self._ts_factories[source_ts] = TypeSupportFactory( source_ts, logger)
+        self._ts_factories[dest_ts] = TypeSupportFactory( dest_ts, logger)
+
+        self.source_factory = TypeSupportFactory( source_ts, logger)
+        self.dest_factory = TypeSupportFactory( dest_ts, logger)
+        self.walker = SQLAWalker()
+
+        # Where we'll store the serializers we'll produce.
+        self._serializers = []
+
+    def _make_serializer( self, type_, fields_control, serializer_name : str = None):
+
+        source_type_support = self.source_factory.get_type_support( type_)
+        dest_type_support = self.dest_factory.get_type_support( type_)
+
+        s = self.walker.walk( source_type_support, type_,
+                              dest_type_support, fields_control)
+        return s
+
+    def make_serializers( self, source_ts, dest_ts, models_fc):
+        """ Generate serializers for a collection of models.
+
+        Returns a dict mapping SQLA mappers to their serializers.
+
+        models_fc : a dict containing SQLAclhemy mappers as keys
+                    and "controls" that describe how to handle their
+                    fields as value. Fields which are not described
+                    in the controls are automatically serialized.
+        """
+
+        serializers = dict()
+
+        source_factory = self._ts_factories[source_ts]
+        dest_factory = self._ts_factories[dest_ts]
+
+        for base_type, fields_control in models_fc.items():
+            source_type_support = source_factory.get_type_support( base_type)
+            dest_type_support = dest_factory.get_type_support( base_type)
+            serializers[base_type] =  Serializer( source_type_support, base_type.__name__, dest_type_support)
+
+        # The following code makes sure the serializers are built in
+        # the right order. This not trivial and helps a lot while
+        # declaring fields controls.
+
+        do_now = dict(models_fc)
+        do_later = dict()
+        stop = False
+
+        while do_now or do_later:
+
+            dbg_missing_deps = []
+            serializers_made = False
+            for base_type, fields_control in do_now.items():
+                fc = dict(fields_control)
+                ftypes, rnames, single_rnames, knames = sqla_attribute_analysis( base_type)
+
+
+                has_unsatisfied_deps = False
+                for relation_name in merge_dicts( rnames, single_rnames):
+                    if relation_name in fields_control and fields_control[relation_name] == SKIP:
+                        continue
+
+                    relation = getattr( base_type, relation_name)
+                    relation_target = inspect(relation).mapper.class_
+                    self._logger.debug("Relation {} of tpye {}".format( relation_name, relation_target))
+                    if relation_target not in serializers:
+                        dbg_missing_deps.append( "{}.{} of type {}".format( base_type.__name__, relation_name, relation_target.__name__))
+                        has_unsatisfied_deps = True
+                        # I could break, but I let it go so that
+                        # the missing deps array is completely built,
+                        # which in turn will improve error reporting.
+                    else:
+                        fc[relation_name] = serializers[relation_target]
+
+
+                if has_unsatisfied_deps:
+                    do_later[base_type] = fields_control
+                else:
+                    serializers[base_type] = self._make_serializer( base_type, fc)
+                    serializers_made = True
+
+
+            if not serializers_made:
+                self._logger.debug( "serializers : {}".format(str( serializers)))
+                self._logger.debug( "to do next  : {}".format( str( do_later)))
+                self._logger.debug( "missing deps: {}".format( dbg_missing_deps))
+                raise Exception("Don't know what to do with these fields : {}. Did you give all mappers ?".format( ", ".join( sorted( dbg_missing_deps))))
+
+            stop = len(do_later) == 0
+            do_now = do_later
+            do_later = dict()
+
+        self._serializers.extend( list( serializers.values()))
+
+    @property
+    def serializers(self):
+        return list( self._serializers)

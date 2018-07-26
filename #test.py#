@@ -395,6 +395,8 @@ make install
 
 Is it correct ? Which one of these fields (gathered from various docs) are actually necessary for a KDE build ?
 
+How do I tell kdebuildsrc to use it without installing wayland on my Debian ?
+
 * Wayland must be upgraded too. I did :
 
 xz -d ~/Downloads/wayland-1.14.91.tar.xz
@@ -413,6 +415,9 @@ sed -e '/CONFIG/a QMAKE_CXXFLAGS += -Wno-expansion-to-defined' \
     -i Tools/qmake/mkspecs/features/unix/default_pre.prf
 mkdir -p build
 cd build
+# I use qt5's qmake because it seems this way it installs webkit
+# in Qt's libs; without that it seems to be completely invisible
+# to the build process, dunno why.
 /mnt/data2/kde/qt5git/bin/qmake ../WebKit.pro
 make
 

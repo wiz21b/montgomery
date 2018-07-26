@@ -3,7 +3,7 @@ import inspect as pyinspect
 from sqlalchemy import Integer, String
 from sqlalchemy.inspection import inspect
 
-from pyxfer.pyxfer  import default_logger, TypeSupport, Serializer, CodeWriter, sqla_attribute_analysis
+from pyxfer.pyxfer  import _default_logger, TypeSupport, Serializer, CodeWriter, sqla_attribute_analysis
 
 
 
@@ -147,7 +147,7 @@ class SQLATypeSupport(TypeSupport):
             package = m.__spec__.name
         else:
             package = m.__file__.replace(".py","")
-            default_logger.warning("I can't find the package name, did you run a python file instead of a python moduyle (python -m ...)")
+            _default_logger.warning("I can't find the package name, did you run a python file instead of a python moduyle (python -m ...)")
 
         cw2.append_code( "from {} import {}".format( package, self._model.__name__))
         return [cw, cw2]

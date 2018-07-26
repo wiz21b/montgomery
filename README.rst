@@ -4,7 +4,7 @@ Pyxfer
 Come back later, this is still alpha code !
 
 Pyxfer is a tool to *generate code* to serialize/marshal/transform
-from one source type to a destination type.  We generate code because
+from one type to another according to a plan.  We generate code because
 it makes super fast serializers, and much less terse than runtime
 attribute analysis (the generated code is quite readable). Right now
 Pyxfer is wired to work with SQLAlchemy_, but nothing prevents it
@@ -17,7 +17,7 @@ How to serialize
 
 Here's a small example
 
-.. code-block:: python
+ .. code-block:: python
 
         # First you describe which types will be
         # serialized (those are the "walked" ones)
