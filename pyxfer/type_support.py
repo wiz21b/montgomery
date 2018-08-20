@@ -509,7 +509,7 @@ class SQLADictTypeSupport(DictTypeSupport):
     key, and therefore, they'll be undistinguishable.
     """
 
-    ID_TAG = "__MGYID__"
+    ID_TAG = "__PYXFERID"
 
     def __init__(self, base_type):
         ftypes, rnames, single_rnames, self._key_names = sqla_attribute_analysis( base_type)

@@ -4,7 +4,7 @@ import logging
 from unittest import skip
 from pprint import pprint, PrettyPrinter
 
-from pyxfer.pyxfer import SQLAWalker, SKIP, generated_code, SQLAAutoGen
+from pyxfer.pyxfer import SQLAWalker, SKIP, generated_code, SQLAAutoGen, analyze_mappers
 from pyxfer.type_support import SQLADictTypeSupport, SQLATypeSupport
 
 logging.getLogger("pyxfer").setLevel(logging.DEBUG)
@@ -12,6 +12,7 @@ logging.getLogger("pyxfer").setLevel(logging.DEBUG)
 from sqlalchemy import MetaData, Integer, ForeignKey, Date, Column, Float, String, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, backref, relationship
+
 
 
 metadata = MetaData()
@@ -94,6 +95,8 @@ class Test(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+
+        # Just building up some object graph with SQLAlchemy
 
         op = Operation()
         op.operation_id = 12
@@ -229,28 +232,34 @@ class Test(unittest.TestCase):
         # First you describe which types will be serialized.  Note
         # that the description of the type itself (fields,
         # relationships) is in fact provided by the SQLAlchemy
-        # mappers.  By default, everything gets serializer (you have
-        # less control, but less to write too).  You can ask to skip
-        # some fileds/relationships in order to avoid unwanted
-        # recursion. If you need more control, check the other test
-        # cases.
+        # mappers.  By default, every field in a model will be
+        # serialized (you have less control, but less to write too).
+        # You can ask to skip some fields/relationships in order to
+        # avoid unwanted recursion. If you need more control, check
+        # the other test cases.
 
-        model_and_field_controls = { Order : {},
-                                     Operation : {},
-                                     OrderPart : { 'order' : SKIP } }
+        # Note that the autogen functions won't recurse through your
+        # mappers automatically.
+
+        model_and_field_controls = analyze_mappers( MapperBase)
+
+        # Let's specify things a bit more. In this case we don't
+        # want order to be serialized as a part of an OrderPart
+        # (this will avoid som unwated recursion)
+        model_and_field_controls[OrderPart] = { 'order' : SKIP }
 
         # Build serializers to serialize from SQLA objects to dicts
         # The SQLAAutoGen class is just a big shortcut
         # to code generation.
-        sqag1 = SQLAAutoGen( SQLATypeSupport, SQLADictTypeSupport, SQLAWalker())
-        sqag1.make_serializers( SQLATypeSupport, SQLADictTypeSupport, model_and_field_controls)
+        sqag1 = SQLAAutoGen( SQLATypeSupport, SQLADictTypeSupport)
+        sqag1.make_serializers( model_and_field_controls)
 
         # Build serializers to serialize in the reverse direction
         # Note that we use the very same construction as above,
         # with parameters in a different order.
 
-        sqag2 = SQLAAutoGen( SQLADictTypeSupport, SQLATypeSupport,  SQLAWalker())
-        sqag2.make_serializers( SQLADictTypeSupport, SQLATypeSupport, model_and_field_controls)
+        sqag2 = SQLAAutoGen( SQLADictTypeSupport, SQLATypeSupport)
+        sqag2.make_serializers( model_and_field_controls)
 
         # Generate the code of the serializers and compile it.
         # notice we gather all the seriliazers to generate the code
@@ -305,128 +314,3 @@ class Test(unittest.TestCase):
 if __name__ == "__main__":
 
     unittest.main()
-
-
-
-"""
-Not building the latest KDE on Debian Stable
-
-Dear Kde-Devel,
-
-2 or 3 months ago I was super motivated to bring one or two very small
-improvements to some KDE components (some small polish here and
-there). I looked at the code and thought I was able to do it (I know
-Qt, C++ but I'm not much in the make system). So I downloaded KDE and
-tried to build it.  I tried for abour 3-4 days to no avail. KDE
-wouldn't build because of some small libraries here and there would
-stubbornly refuse to build, because of missing dependencies not taken
-into account in the build system or documentatio. I tried IRC, read a
-lot on the various wiki's (but not this ML), no success. And my setup
-was nothing fancy, I just tried to build KDE on Debian latest's stable
-(a year old or so).
-
-In case you wonder, things turned very bad when I had to compile
-qtwebkit (which is/is not in Qt anymore, it's very unclear to me) and
-kwayland because Debian's stable versions are too old; it was
-impossible to figure how to build qt5webkit and kde-srcbuild would not
-see the wayland/webkit I built. To this day, I still don't know if it
-is even possible to build the most recent KDE on Debian stable.
-
-The problem I think lies with kdesrc-build. Its problem is that it
-*almost* work. It works like 95%.  But the issue is : kdesrc-build
-embodies a very advanced knowledge of KDE and therefore, there seems
-to be no one who's able to understand or fix it. So the last 5% just
-blocks everything.
-
-I also understand KDE is a volunteer project and that time is scarce
-and people prefer to write code than to sort out details of the
-build procedure. Been there, done that.
-
-If someone would help me a bit, that'd be fine. And I'd be more than
-happy to document my efforts in the various wiki (if I'm sure information
-will be made available).
-
-Some more info. When trying to build KDE, you fall there :
-
->>> https://kdesrc-build.kde.org/
->>> https://docs.kde.org/trunk5/en/extragear-utils/kdesrc-build/index.html
->>> https://community.kde.org/Guidelines_and_HOWTOs/Build_from_source
->>> https://community.kde.org/Guidelines_and_HOWTOs/Build_from_source/Details
-
-this documentation is nice but it completely avoids the question of
-what platform one builds on.  And that sounds just wrong since I'm
-sure there are many people who build KDE and therefore, there must be
-a ton of experience floating around.
-
-Also, during the course of my attempt to build KDE, the build system
-was updated 2 or 3 times on git and it was broken once. And of course,
-when you don't know that system, the fact it's broken is absolutely not
-obvious to you so you spend hours figuring out what's wrong. Could there
-be some "stable" snapshots of KDE sources (and a road to upgrade from
-there to the latest developement) ?
-
-Now I see :
-
->>> https://marc.info/?l=kde-devel&m=150804247525359&w=2
-
-wouldn't it be great if kdesrcbuild just said "I won't build Qt5,
-please use the Qt5 official release, located at this URL and follow
-the instructions at that URL" ? I insist a bit because, for Qt5, things
-are not clear neither : which version is OK ? The source one ? the
-prebuilt ? For me the source version worked better, but I sure don't
-know why.
-
-Overall, my experience is it's very tough to get onboard KDE, because
-it's like there amny things that are "assumed" to be known here and there.
-And each of these little thing is a little effort that could be avoided
-if properly documented. And the sum of the little efforts for these
-little things is quite taxing...
-
-Some difficulties I had :
-
-* I had to build Qt5 myself ('cos Debian's is outdated). Which Qt5 version should I use ? I used :
-
-git clone git://code.qt.io/qt/qt5.git
-cd qt5
-git checkout 5.9
-perl init-repository
-./configure --prefix=/mnt/data2/kde/qt5git -opensource -release -nomake tests -nomake examples -confirm-license -no-gtk -dbus -no-separate-debug-info -xcb -system-xcb -qpa xcb -release -force-debug-info -reduce-relocations -optimized-qmake -no-gstreamer
-make install
-
-Is it correct ? Which one of these fields (gathered from various docs) are actually necessary for a KDE build ?
-
-* Wayland must be upgraded too. I did :
-
-xz -d ~/Downloads/wayland-1.14.91.tar.xz
-./configure --prefix=/mnt/data2/kde/wayland --disable-documentation
-make
-make install
-
-How do I tell kdebuildsrc to use it without installing wayland on my Debian ?
-
-* Should I build qtwebkit ? I did this :
-
-Downlaoded qtwebkit opensource 5.9.0 (is it right ?)
-cd qtwebkit-opensource-src-5.9.0
-# This was found on the web, dunno exatcly what it does :
-sed -e '/CONFIG/a QMAKE_CXXFLAGS += -Wno-expansion-to-defined' \
-    -i Tools/qmake/mkspecs/features/unix/default_pre.prf
-mkdir -p build
-cd build
-/mnt/data2/kde/qt5git/bin/qmake ../WebKit.pro
-make
-
-Again, how do I tell kdebuildsrc to use it without installing wayland on my Debian ?
-
-
-
-Stefan
-
-PS: I'm not blaming anybody, KDE is fantastic and I use it a lot. It's just
-it was a very frustrating experience.
-
-PS2: maybe I'm not good enough to build KDE :-( But having written C, C++,
-python, java, assembly on the course of 30+ years in start ups, big companies, etc.
-should do it, should it ?
-
-"""

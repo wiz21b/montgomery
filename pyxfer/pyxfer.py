@@ -622,7 +622,7 @@ class SQLAWalker:
         self._logger.debug("Registering serializer {} {}".format(source_type_support, serializer.func_name()))
 
         if serializer.func_name() in self.serializers:
-            raise Exception("Looks like you define the same serializer twice : from {} to {} following a schema defined by {} (serializer function is '{}'(...))".format( serializer.source_type_support, serializer.destination_type_support, serializer.base_type_name, serializer.func_name()))
+            raise Exception("Looks like you define the same serializer twice : from {} to {} following a schema defined by {} (serializer function is '{}'(...)). Maybe you should use qualify the name further (using series name)".format( serializer.source_type_support, serializer.destination_type_support, serializer.base_type_name, serializer.func_name()))
 
         self.serializers[ serializer.func_name() ] = serializer
 
@@ -888,19 +888,24 @@ def generated_code( serializers : list) -> str:
 class SQLAAutoGen:
     """ This is a collection of methods that allows to set up
     the code generation more easily.
+
+    It is tuned for SQLAlchemy objects.
     """
 
-    def __init__(self, source_ts : TypeSupport,
-                 dest_ts : TypeSupport,
-                 walker : SQLAWalker,
+    def __init__(self, source_ts,
+                 dest_ts,
                  logger : logging.Logger = _default_logger):
         """ The TypeSupport provided are expected to have
         parameter-less constructors.
         """
 
-        assert source_ts and dest_ts and source_ts != dest_ts, "Serializing from one type to itself doesn't make sense"
+        assert source_ts and dest_ts,"Missing type support"
+        assert source_ts != dest_ts, "Serializing from one type to itself doesn't make sense"
 
         self._logger = logger
+
+        self._base_source_ts = source_ts
+        self._base_dest_ts = dest_ts
 
         # We use TypeSupport factories to reuse instances of the TypeSupports
         # This allows the type supports to generate code more
@@ -915,7 +920,7 @@ class SQLAAutoGen:
         self.walker = SQLAWalker()
 
         # Where we'll store the serializers we'll produce.
-        self._serializers = []
+        self._serializers = dict()
 
     def _make_serializer( self, type_, fields_control, serializer_name : str = None):
 
@@ -923,10 +928,11 @@ class SQLAAutoGen:
         dest_type_support = self.dest_factory.get_type_support( type_)
 
         s = self.walker.walk( source_type_support, type_,
-                              dest_type_support, fields_control)
+                              dest_type_support, fields_control,
+                              serializer_name)
         return s
 
-    def make_serializers( self, source_ts, dest_ts, models_fc):
+    def make_serializers( self, models_fc, series_name = None):
         """ Generate serializers for a collection of models.
 
         Returns a dict mapping SQLA mappers to their serializers.
@@ -937,70 +943,131 @@ class SQLAAutoGen:
                     in the controls are automatically serialized.
         """
 
+        if series_name is not None:
+            print( sorted( [ "{} series:{}".format(c[0].__name__, c[1]) for c in self._serializers.keys()]))
+
         serializers = dict()
 
-        source_factory = self._ts_factories[source_ts]
-        dest_factory = self._ts_factories[dest_ts]
+        source_factory = self._ts_factories[self._base_source_ts]
+        dest_factory = self._ts_factories[self._base_dest_ts]
 
         for base_type, fields_control in models_fc.items():
             source_type_support = source_factory.get_type_support( base_type)
             dest_type_support = dest_factory.get_type_support( base_type)
-            serializers[base_type] =  Serializer( source_type_support, base_type.__name__, dest_type_support)
+
+            # Create "place holders" (Serializers are not built on __init__)
+
+            serializers[ (base_type, series_name) ] = Serializer( source_type_support, base_type.__name__, dest_type_support, series_name)
 
         # The following code makes sure the serializers are built in
-        # the right order. This not trivial and helps a lot while
-        # declaring fields controls.
+        # the right order (remember serializers depend on each other
+        # thus their definition order is important). This not trivial
+        # and helps a lot while declaring fields controls.
 
         do_now = dict(models_fc)
         do_later = dict()
-        stop = False
 
+        # On each iteration, some (model, field controls) pairs
+        # will be removed from do_now and, possibly, put in
+        # do_later.
         while do_now or do_later:
 
             dbg_missing_deps = []
             serializers_made = False
             for base_type, fields_control in do_now.items():
-                fc = dict(fields_control)
+                fc = dict(fields_control) # shallow copy !
                 ftypes, rnames, single_rnames, knames = sqla_attribute_analysis( base_type)
 
+                # Recurse down the base_type (SQLAlchemy model)
+
+                # IMPORTANT : we don't look for SQLA models ourselves,
+                # we leave it to the user to enumerate all the models
+                # he wants us to analyze.
 
                 has_unsatisfied_deps = False
                 for relation_name in merge_dicts( rnames, single_rnames):
-                    if relation_name in fields_control and fields_control[relation_name] == SKIP:
+
+                    # Did the user request to skip this relation ?
+                    if relation_name in fields_control and \
+                       fields_control[relation_name] == SKIP:
                         continue
 
+                    # analyze the relation
                     relation = getattr( base_type, relation_name)
                     relation_target = inspect(relation).mapper.class_
-                    self._logger.debug("Relation {} of tpye {}".format( relation_name, relation_target))
-                    if relation_target not in serializers:
-                        dbg_missing_deps.append( "{}.{} of type {}".format( base_type.__name__, relation_name, relation_target.__name__))
-                        has_unsatisfied_deps = True
-                        # I could break, but I let it go so that
-                        # the missing deps array is completely built,
-                        # which in turn will improve error reporting.
+                    self._logger.debug("Analyzing, in series '{}' of '{}', relation '{}' of type '{}'".format(
+                        series_name, base_type, relation_name, relation_target))
+
+                    k = (relation_target, series_name)
+                    k_alternate = (relation_target, None)
+
+                    if k in serializers:
+                        self._logger.debug("Found serializer : {}, named {}".format(k, serializers[ k].func_name()))
+                        # We know how to handle that relation,
+                        # so we store that in the fields controls
+                        fc[relation_name] = serializers[ k]
+
+                    elif k_alternate in self._serializers:
+                        self._logger.debug("Found alternate serializer : {}".format(k_alternate))
+                        fc[relation_name] = self._serializers[ k_alternate]
+
                     else:
-                        fc[relation_name] = serializers[relation_target]
+                        dbg_missing_deps.append( "{}.{} of type {}".format(
+                            base_type.__name__, relation_name, relation_target.__name__))
+                        has_unsatisfied_deps = True
+                        # I could break out of the loop, but I let it
+                        # go so that the missing deps array is
+                        # completely built, which in turn will improve
+                        # error reporting.
 
 
-                if has_unsatisfied_deps:
-                    do_later[base_type] = fields_control
-                else:
-                    serializers[base_type] = self._make_serializer( base_type, fc)
+                # At thuis point, we're done with analyzing the relationships
+                # of the current SQLA model class.
+
+                if not has_unsatisfied_deps:
+                    # All the relationships of the the model have
+                    # a corresponding serializer. Therefore we can
+                    # build the serializer for this model.
+
+                    serializers[ (base_type, series_name) ] = self._make_serializer( base_type, fc, series_name)
                     serializers_made = True
+                else:
+                    # Some relationsipfs of the SQLA model have no
+                    # corresponding serializer. This means that we'll
+                    # have to build serializers for other models
+                    # (hoping to find the missing one) So we now
+                    # remind to reanalyse the SQLAModel later on.
+                    do_later[base_type] = fields_control
 
 
             if not serializers_made:
-                self._logger.debug( "serializers : {}".format(str( serializers)))
+                self._logger.debug( "serializers : {}".format( str( serializers)))
                 self._logger.debug( "to do next  : {}".format( str( do_later)))
                 self._logger.debug( "missing deps: {}".format( dbg_missing_deps))
-                raise Exception("Don't know what to do with these fields : {}. Did you give all mappers ?".format( ", ".join( sorted( dbg_missing_deps))))
+                raise Exception("Why building series '{}', don't know what to do with these fields : {}. Did you give all mappers ?".format( series_name, ", ".join( sorted( dbg_missing_deps))))
 
-            stop = len(do_later) == 0
             do_now = do_later
             do_later = dict()
 
-        self._serializers.extend( list( serializers.values()))
+        s = list( serializers.values())
+        self._serializers.update( serializers)
+        return s
+
+    def serializer_by_name( self, klass, series_names : str):
+        return self._serializers[ (klass, series_names) ]
 
     @property
     def serializers(self):
-        return list( self._serializers)
+        return list( self._serializers.values())
+
+def analyze_mappers( mapper : 'class'):
+    d = dict()
+    for c in _find_subclasses( mapper):
+        d[c] = {}
+    return d
+
+def _find_subclasses( cls):
+    results = []
+    for sc in cls.__subclasses__():
+        results.append(sc)
+    return results
