@@ -5,16 +5,6 @@ from sqlalchemy.inspection import inspect
 
 from pyxfer.pyxfer  import _default_logger, TypeSupport, Serializer, CodeWriter, sqla_attribute_analysis
 
-# def peek( source, cache):
-#     if '__PYX_REUSE' in source:
-#         # Rememeber __PYX_REUSE is only set for objects wihout
-#         # PK.
-#         # In case the PK is not set for two objects of same type,
-#         # then SQLA has no way to know that they are both the
-#         # same objects or they are different objects. The __PYX_REUSE
-#         # allows to remove this unknown.
-
-#         return cache[ source[ '__PYX_REUSE']]
 
 
 def gen_merge_relation_sqla(serializer : Serializer,

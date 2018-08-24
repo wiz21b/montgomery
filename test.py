@@ -170,11 +170,34 @@ class Test(unittest.TestCase):
         assert o.parts[1].name == "Part Two"
         assert o.parts[2].name == "part 3"
 
+
     def test_load_object(self):
         self._gen_code(SQLATypeSupport, ObjectTypeSupport)
         o = session.query(Order).filter(Order.order_id == 10000).one()
-        serialized = self.executed_code['serialize_Order_Order_to_CopyOrder']( o, None, dict())
+        s = self.executed_code['serialize_Order_Order_to_CopyOrder']( o, None, dict())
+        session.commit()
 
+        assert len(s.parts) == 2
+        assert s.parts[0].name == 'Part One'
+        assert s.parts[1].name == 'Part Two'
+        assert type(s) == self.executed_code['CopyOrder']
+        assert type(s.parts[0]) == self.executed_code['CopyOrderPart']
+
+        p = self.executed_code['CopyOrderPart']()
+        p.name = 'Part Three'
+        p.order_id = s.order_id # Pyxfer doesn't find this alone :-(
+        s.parts.append(p)
+
+        op = self.executed_code['CopyOperation']()
+        op.name = "zorglub"
+        s.parts[-1].operation = op
+
+        with session.no_autoflush:
+            o = session.query(Order).filter(Order.order_id == 10000).one()
+            s = self.executed_code['serialize_Order_CopyOrder_to_Order']( s, o, session, dict())
+        session.commit()
+
+        assert len(o.parts) == 3
 
     def test_simple_creation(self):
         model_and_field_controls = analyze_mappers( MapperBase)
