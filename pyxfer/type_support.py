@@ -5,10 +5,72 @@ from sqlalchemy.inspection import inspect
 
 from pyxfer.pyxfer  import _default_logger, TypeSupport, Serializer, CodeWriter, sqla_attribute_analysis
 
+# def peek( source, cache):
+#     if '__PYX_REUSE' in source:
+#         # Rememeber __PYX_REUSE is only set for objects wihout
+#         # PK.
+#         # In case the PK is not set for two objects of same type,
+#         # then SQLA has no way to know that they are both the
+#         # same objects or they are different objects. The __PYX_REUSE
+#         # allows to remove this unknown.
 
+#         return cache[ source[ '__PYX_REUSE']]
 
 
 def gen_merge_relation_sqla(serializer : Serializer,
+                            relation_source_expr : str,
+                            relation_dest_expr : str,
+                            rel_source_type_support : TypeSupport,
+                            rel_dest_type_support : TypeSupport,
+                            serializer_call_code,
+                            walk_type,
+                            collection_class,
+                            base_cache_name):
+
+    serializer.append_code("used = set()")
+    # used = ()
+
+    # for item in source.relation:
+    serializer.append_code("for item in {}:".format( relation_source_expr))
+    serializer.indent_right()
+
+    #rel_source_type_support._make_cache_key_expression( self, key_fields, cache_base_name, type_support : TypeSupport, instance_name):
+
+    rel_source_type_support.cache_key( serializer, "rck", "item", base_cache_name)
+
+    # dest = peek( item) # see if we have already deserialized this.
+    serializer.append_code(   "dest_item = cache.get( rck, None)")
+    # dest2 = serialize_OrderPart_dict_to_OrderPart(item, dest, session , cache)
+    serializer.append_code(   "dest_item2 = {}".format(serializer_call_code("item", "dest_item")))
+
+    # if dest is None:
+    serializer.append_code(   "if dest_item is None:")
+    serializer.indent_right()
+
+    #    relation.add( dest2)
+    if collection_class == list:
+        serializer.append_code(      'print("{}, {}".format(dest_item2, dest_item2 in session))')
+        serializer.append_code(      "{}.append(dest_item2)".format( relation_dest_expr))
+    elif collection_class == set:
+        #raise Exception("breakpont")
+        serializer.append_code(      "{}.add(dest_item2)".format( relation_dest_expr))
+    else:
+        raise Exception("Unrecognized collection type")
+
+    serializer.indent_left()
+
+    # used.add( dest2)
+    serializer.append_code(   "used.add( dest_item2)")
+    serializer.indent_left()
+
+    # for item in set(dest.relation) - used:
+    serializer.append_code("for item in set({}) - used:".format(relation_dest_expr))
+    serializer.indent_right()
+    #    dest.relation.remove(item) # may or may not actually delete the item
+    serializer.append_code("{}.remove(item)".format(relation_dest_expr))
+    serializer.indent_left()
+
+def gen_merge_relation_sqla2(serializer : Serializer,
                             relation_source_expr : str,
                             relation_dest_expr : str,
                             rel_source_type_support : TypeSupport,
@@ -63,9 +125,14 @@ def gen_merge_relation_sqla(serializer : Serializer,
     # in this one there are no item without keys. So the code
     # is a bit simpler to write.
 
+    serializer.append_code("# Figure out what is currently in the relation.")
+    serializer.append_code("# That's useful to know what to add or delete.")
+
     serializer.append_code("dest_inst_keys = dict()")
     serializer.append_code("for item in {}:".format( relation_dest_expr))
-    serializer.append_code("   dest_inst_keys[ ({})] = {} # from {}".format(",".join(key_parts_extractors), "item", rel_dest_type_support))
+    serializer.indent_right()
+    serializer.append_code(   "dest_inst_keys[ ({})] = {} # from {}".format(",".join(key_parts_extractors), "item", rel_dest_type_support))
+    serializer.indent_left()
 
     # At this point we have a dict of all the existing keys.
     # We can now write the code to merge.
@@ -73,32 +140,70 @@ def gen_merge_relation_sqla(serializer : Serializer,
     # We run through the source items. Each one is either
     # added or merged.
 
+    serializer.append_blank()
     serializer.append_code("for item in {}:".format( relation_source_expr))
-    serializer.append_code("   key = {}   # from {}".format(",".join(source_key_parts_extractors), rel_source_type_support))
-    serializer.append_code("   if key in dest_inst_keys:")
-    serializer.append_code("       # merge into existing destination instance already in the SQLA session")
-    serializer.append_code("       {}".format(serializer_call_code("item", "dest_inst_keys[key]")))
-    serializer.append_code("       del dest_inst_keys[key] # Mark the key as treated (by removing it) ")
-    serializer.append_code("   else:")
-    serializer.append_code("       # adding new destination instance to the SQLA session")
-    serializer.append_code("       # this will create new dest instances if necessary ")
-    serializer.append_code("       s = {}".format(serializer_call_code("item", None)))
-    serializer.append_code("       session.add(s)")
+    serializer.indent_right()
+    serializer.append_code(   "# The difficulty here is to locate the instance to which")
+    serializer.append_code(   "# we will deserialize. To find it we need to have some key")
+    serializer.append_code(   "# but that key comes from the source object which has not")
+    serializer.append_code(   "# yet been deserialized... So it's chicken and egg.")
+    serializer.append_code(   "# Therefore, what we need to do is to peek at the source")
+    serializer.append_code(   "# before serializing it. Since we'll compare not deserialized")
+    serializer.append_code(   "# objects ot existing instance, we'll only be able to")
+    serializer.append_code(   "# compare them base on they primary/business keys.")
+    serializer.append_code(   "# However, in that situation, a difficilty arises")
+    serializer.append_code(   "# If we receive two unserialized both with uninitialized")
+    serializer.append_code(   "# PK, we cannot say if those two objects are instances")
+    serializer.append_code(   "# of the same thing or if they are two different things.")
+    serializer.append_code(   "# ")
+
+    # If source primary/business key is set:
+    #     compare source.key with current_instances.key
+    #     if current_instance with same primary/business key exists (== same_instance):
+    #        # it's an update
+    #        copy the source into same_instance
+    #     if it doesn't exist:
+    #        # it's a creation (with valid PK)
+    #        add a new instance to existing instances
+    #        and copy the source into that instance
+
+    # If source primary/business key is not set:
+    #     if source is another source object:
+    #        then deserialization already occured, just add the source to the current_instances (so ther will be a double in the current instances
+    #     else source is brand new:
+    #        # it's a creation (with an unset PK)
+    #        add a new instance to existing instances
+    #        and copy the source into that instance
+
+    serializer.append_code(   "key = {}   # from {}".format(",".join(source_key_parts_extractors), rel_source_type_support))
+    serializer.append_code(   "if key in dest_inst_keys: # We expect None is never in dest_inst")
+    serializer.append_code(   "    # merge into existing destination instance already in the SQLA session")
+    serializer.append_code(   "    {}".format(serializer_call_code("item", "dest_inst_keys[key]")))
+    serializer.append_code(   "    del dest_inst_keys[key] # Mark the key as treated (by removing it) ")
+    serializer.append_code(   "else:")
+    serializer.append_code(   "    # adding new destination instance to the SQLA session")
+    serializer.append_code(   "    # this will create new dest instances if necessary ")
+    serializer.append_code(   "    s = {}".format(serializer_call_code("item", "peek({}, {})".format( "item", "cache"))))
+    serializer.append_code(   "    session.add(s)")
 
 
 
     if collection_class == list:
-        serializer.append_code("       {}.append({}) # Container is a list".format( relation_dest_expr, "s"))
+        serializer.append_code("    {}.append({}) # Container is a list".format( relation_dest_expr, "s"))
     elif collection_class == set:
         #raise Exception("breakpont")
-        serializer.append_code("       {}.add({}) # Container is a set ".format( relation_dest_expr, "s"))
+        serializer.append_code("    {}.add({}) # Container is a set ".format( relation_dest_expr, "s"))
     else:
         raise Exception("Unrecognized collection type")
 
+    serializer.indent_left()
 
+    serializer.append_blank()
     serializer.append_code("# Remove objects in dest but not in source (we assume they're deleted)")
     serializer.append_code("for inst in dest_inst_keys.values():")
-    serializer.append_code("   {}.remove(inst)".format( relation_dest_expr))
+    serializer.indent_right()
+    serializer.append_code(    "{}.remove(inst)".format( relation_dest_expr))
+    serializer.indent_left()
     serializer.append_blank()
 
 
@@ -143,7 +248,13 @@ class SQLATypeSupport(TypeSupport):
         cw2 = CodeWriter()
 
         m = pyinspect.getmodule( self._model)
-        if m and m.__spec__:
+        if m.__name__ == "__main__":
+            # the start module is named __main__ and a class ABC
+            # defined there is of type : __main__.ABC (even if
+            # the module is actually named "test", so you don't
+            # get test.ABC but __main__.ABC, weird IMHO).
+            package = "__main__"
+        elif m and m.__spec__:
             package = m.__spec__.name
         else:
             package = m.__file__.replace(".py","")
@@ -213,7 +324,8 @@ class SQLATypeSupport(TypeSupport):
                       source_ts, dest_ts,
                       rel_source_type_support,
                       serializer_call_code,
-                      walk_type):
+                      walk_type,
+                      base_cache_name):
 
         serializer.append_blank()
         serializer.append_code("# Copy relation '{}'".format(relation_name))
@@ -235,7 +347,8 @@ class SQLATypeSupport(TypeSupport):
                                        rel_source_type_support, self,
                                        serializer_call_code,
                                        walk_type,
-                                       collection_class)
+                                       collection_class,
+                                       base_cache_name)
 
 
     def __str__(self):
@@ -316,7 +429,7 @@ class DictTypeSupport(TypeSupport):
                       source_ts, dest_ts,
                       rel_source_type_support,
                       serializer_call_code,
-                      base_type = None):
+                      base_type, base_cache_name):
 
         serializer.append_code("# ------ relation : {} ------".format(relation_name))
         serializer.append_code("")
@@ -351,11 +464,11 @@ class ObjectTypeSupport(TypeSupport):
         self._relations = dict()
 
         if isinstance( obj_or_name, str):
-            self._name = obj_or_name
+            self._name = "Copy" + obj_or_name
             self._base_type = None
         else:
             #print("Breakpoint : {} aka {}".format( obj_or_name, obj_or_name.__name__))
-            self._name = obj_or_name.__name__
+            self._name = "Copy" + obj_or_name.__name__
             self._base_type = obj_or_name
 
     def type(self):
@@ -440,7 +553,7 @@ class ObjectTypeSupport(TypeSupport):
                       source_ts, dest_ts,
                       rel_source_type_support,
                       serializer_call_code,
-                      base_type = None):
+                      base_type, base_cache_name):
 
         serializer.append_code("# ------ relation : {} ------".format(relation_name))
         serializer.append_code("")
@@ -472,7 +585,7 @@ class SQLADictTypeSupport(DictTypeSupport):
 
     The challenge we solve here is this. When converting from entities
     to dicts, if the same entity appears more than once, then we don't
-    want to have as manyy dicts representing the same entity. What we
+    want to have as many dicts representing the same entity. What we
     want is to have one dict as a serialization of the entity
     and as many "shortcuts" dicts to represent it in a short form.
 
@@ -509,44 +622,83 @@ class SQLADictTypeSupport(DictTypeSupport):
     key, and therefore, they'll be undistinguishable.
     """
 
-    ID_TAG = "__PYXFERID"
+    ID_TAG = "__PYX_CACHE"
 
     def __init__(self, base_type):
         ftypes, rnames, single_rnames, self._key_names = sqla_attribute_analysis( base_type)
 
-    def cache_key( self, serializer : Serializer, key_var : str, source_instance_name : str, cache_base_name : str):
-        # Compute cache key out of a dict
 
+    def cache_key( self, serializer : Serializer, cache_key_var : str, source_instance_name : str, cache_base_name : str):
+        # Compute cache key out of a dict
         cke = self._make_cache_key_expression( self._key_names, cache_base_name, self, source_instance_name)
 
+        # With dicts, we can't rely on PK/busineesKeys because when
+        # they are not set, we can't detect multiple appearance of
+        # the same object. So we use surrogate keys.
+
         #serializer.append_code("zulu = {}".format(cke))
-        serializer.append_code("if '{}' in {}:".format( self.ID_TAG, source_instance_name))
+        serializer.append_code("if '__PYX_REUSE' in {}:".format( source_instance_name))
         serializer.indent_right()
-        serializer.append_code("{} = {}['{}']".format(
-            key_var,
-            source_instance_name,
-            self.ID_TAG))
+        serializer.append_code("v = {}['__PYX_REUSE']".format( source_instance_name))
+        serializer.append_code("if type(v) == tuple:".format( source_instance_name))
+        serializer.indent_right()
+        serializer.append_code("{} = ('{}',) + v".format(
+            cache_key_var,
+            cache_base_name))
         serializer.indent_left()
         serializer.append_code("else:")
         serializer.indent_right()
-        serializer.append_code("{} = {}".format(
-            key_var,
-            cke))
+        serializer.append_code("{} = ('{}', v)".format(
+            cache_key_var,
+            cache_base_name))
         serializer.indent_left()
+
+        serializer.indent_left()
+        serializer.append_code("elif '__PYXID' in {}:".format( source_instance_name))
+        serializer.indent_right()
+        serializer.append_code("# This one will be *stored* in cache")
+        serializer.append_code("{} = ('{}', {}['{}'])".format(
+            cache_key_var,
+            cache_base_name,
+            source_instance_name,
+            '__PYXID'))
+        serializer.indent_left()
+        serializer.append_code("else:")
+        serializer.indent_right()
+
+        key_parts_extractors = []
+        for k_name in self._key_names:
+            key_parts_extractors.append(
+                self.gen_read_field( source_instance_name, k_name))
+
+        serializer.append_code("{} = ('{}', {})".format( cache_key_var, cache_base_name, ",".join(key_parts_extractors)))
+        # serializer.append_code("{} = {}".format(
+        #     cache_key_var,
+        #     cke))
+        serializer.indent_left()
+
 
     def cache_on_write(self, serializer, source_type_support, source_instance_name, cache_base_name, dest_instance_name):
         cke = self._make_cache_key_expression( self._key_names, cache_base_name, source_type_support, source_instance_name)
         serializer.append_code("zulu = {}".format(cke))
 
+        serializer.append_code("# Compute how the object will be rendered if it's to be")
+        serializer.append_code("# rendered again")
         serializer.append_code("if any(zulu[1:]):")
         serializer.indent_right()
-        serializer.append_code( "cache[cache_key] = {}".format(
-            self._make_cache_value_expression(
-                self._key_names, source_type_support, source_instance_name)))
+        serializer.append_code( "cache[cache_key] = {{ {} }}".format(
+            "'__PYX_REUSE' : zulu[1:]"))
+        # serializer.append_code( "cache[cache_key] = {}".format(
+        #     self._make_cache_value_expression( self._key_names, source_type_support, source_instance_name, [ "'__PYX_REUSE' : zulu[1:]" ])))
         serializer.indent_left()
         serializer.append_code("else:")
         serializer.indent_right()
-        serializer.append_code( "cache[cache_key] = {{ '{}' : id({}) }}".format(self.ID_TAG, source_instance_name))
+        serializer.append_code( "# We use a PYXID only if it is necessary, that is, only if")
+        serializer.append_code( "# an object has no primary/business key")
+        serializer.append_code( "cache[cache_key] = {}".format(
+            self._make_cache_value_expression( self._key_names, source_type_support, source_instance_name, [ "'__PYX_REUSE' : id(source)" ])))
+
+        serializer.append_code( "dest['__PYXID'] = id(source)")
         serializer.indent_left()
 
         # serializer.append_code( "short_form = {}".format(
@@ -556,8 +708,8 @@ class SQLADictTypeSupport(DictTypeSupport):
         # serializer.append_code( "cache[cache_key] = {{ '{}' : id({}) }}".format(self.ID_TAG, source_instance_name))
 
 
-    def _make_cache_value_expression( self, key_fields, type_support : TypeSupport, instance_name):
-        parts = []
+    def _make_cache_value_expression( self, key_fields, type_support : TypeSupport, instance_name, base_parts):
+        parts = base_parts
         for k_name in key_fields:
             parts.append( "'{}' : {}".format(
                 k_name, type_support.gen_read_field( instance_name, k_name)))
@@ -566,12 +718,43 @@ class SQLADictTypeSupport(DictTypeSupport):
 
 
     def _make_cache_key_expression( self, key_fields, cache_base_name, type_support : TypeSupport, instance_name):
+        """ Builds a tuple containing th key fields values
+        """
         assert type(key_fields) == list and len(key_fields) > 0, "Wrong keys : {}".format( key_fields)
         assert isinstance( type_support, TypeSupport)
         assert type(instance_name) == str and len(instance_name) > 0
 
-        key_parts_extractors = [ "'{}'".format(cache_base_name)]
+        key_parts_extractors = []
+        if cache_base_name:
+            key_parts_extractors.append( "'{}'".format(cache_base_name))
+
         for k_name in key_fields:
             key_parts_extractors.append( type_support.gen_read_field( instance_name, k_name))
 
         return "({})".format( ",".join(key_parts_extractors))
+
+    def gen_peek( self, source_instance_name : str, cache_var : str):
+        return "peek( {}, {})".format( source_instance_name, cache_var)
+
+    def gen_global_code(self) -> CodeWriter:
+        cw = CodeWriter()
+
+        # Remember __PYX_REUSE is only set for objects wihout PK. In
+        # case the PK is not set for two objects of same type, then
+        # SQLA has no way to know that they are both the same objects
+        # or they are different objects. The __PYX_REUSE allows to
+        # remove this unknown.
+
+        cw.append_code("def peek( source,cache):")
+        cw.indent_right()
+        cw.append_code(   "if '__PYX_REUSE' in source:")
+        cw.indent_right()
+        cw.append_code(      "return cache.get( source[ '__PYX_REUSE'], None)")
+        cw.indent_left()
+        cw.append_code(   "else:")
+        cw.indent_right()
+        cw.append_code(      "return None")
+        cw.indent_left()
+        cw.indent_left()
+
+        return cw

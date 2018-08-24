@@ -1,11 +1,12 @@
 import io
+import json
 import unittest
 import logging
 from unittest import skip
 from pprint import pprint, PrettyPrinter
 
 from pyxfer.pyxfer import SQLAWalker, SKIP, generated_code, SQLAAutoGen, analyze_mappers
-from pyxfer.type_support import SQLADictTypeSupport, SQLATypeSupport
+from pyxfer.type_support import SQLADictTypeSupport, SQLATypeSupport, ObjectTypeSupport
 
 logging.getLogger("pyxfer").setLevel(logging.DEBUG)
 
@@ -34,7 +35,7 @@ class Order(MapperBase):
     start_date = Column('start_date',Date)
     cost = Column('hourly_cost',Float,nullable=False,default=0)
 
-    parts = relationship('OrderPart', backref=backref('order'))
+    parts = relationship('OrderPart', backref=backref('order'), cascade="delete, delete-orphan")
 
 
 class OrderPart(MapperBase):
@@ -59,8 +60,8 @@ session = Session()
 
 def print_code( gencode : str):
     lines = gencode.split("\n")
-    for i in range( 1, len( lines)):
-        lines[i] = "{:5}: {}".format(i, lines[i])
+    for i in range( 0, len( lines)):
+        lines[i] = "{:5}: {}".format(i+1, lines[i])
     print( "\n".join( lines) )
 
 
@@ -93,17 +94,23 @@ def canonize_dict( d : dict):
 
 class Test(unittest.TestCase):
 
-    @classmethod
-    def setUpClass(cls):
+    def setUp(self):
+
+        session.query(Order).delete()
+        session.query(OrderPart).delete()
+        session.query(Operation).delete()
+        session.commit()
+
 
         # Just building up some object graph with SQLAlchemy
 
-        op = Operation()
-        op.operation_id = 12
-        op.name = "lazer cutting"
-        session.add(op)
+        self._op = Operation()
+        self._op.operation_id = 12
+        self._op.name = "lazer cutting"
+        session.add( self._op)
 
         o = Order()
+        o.order_id = 10000
         o.hourly_cost = 1.23
         session.add(o)
 
@@ -112,15 +119,141 @@ class Test(unittest.TestCase):
         p.name = "Part One"
         p.order_id = o.order_id
         o.parts.append(p)
-        p.operation = op
+        p.operation = self._op
 
         p = OrderPart()
         p.name = "Part Two"
         session.add(p)
         o.parts.append(p)
-        p.operation = op
+        p.operation = self._op
 
         session.commit()
+
+    def _gen_code( self, source_ts, dest_ts):
+        model_and_field_controls = analyze_mappers( MapperBase)
+        model_and_field_controls[OrderPart] = { 'order' : SKIP }
+
+        sqag1 = SQLAAutoGen( source_ts, dest_ts)
+        sqag1.make_serializers( model_and_field_controls)
+
+        sqag2 = SQLAAutoGen( dest_ts, source_ts)
+        sqag2.make_serializers( model_and_field_controls)
+
+        gencode = generated_code( sqag1.serializers + sqag2.serializers)
+        self.executed_code = dict()
+        print_code(gencode)
+        exec( compile( gencode, "<string>", "exec"), self.executed_code)
+
+
+
+    def test_load_and_append_element(self):
+        self._gen_code(SQLATypeSupport, SQLADictTypeSupport)
+
+        o = session.query(Order).filter(Order.order_id == 10000).one()
+
+
+        serialized = self.executed_code['serialize_Order_Order_to_dict']( o, None, dict())
+        pprint( serialized)
+
+        serialized['parts'].append(
+            { 'name': 'part 3',
+              'operation_id': 12,
+              'order_id': serialized['order_id'],
+              'order_part_id': None} )
+
+        with session.no_autoflush:
+            self.executed_code['serialize_Order_dict_to_Order']( serialized, o, session, dict())
+
+        session.commit()
+
+        assert len(o.parts) == 3
+        assert o.parts[1].name == "Part Two"
+        assert o.parts[2].name == "part 3"
+
+    def test_load_object(self):
+        self._gen_code(SQLATypeSupport, ObjectTypeSupport)
+        o = session.query(Order).filter(Order.order_id == 10000).one()
+        serialized = self.executed_code['serialize_Order_Order_to_CopyOrder']( o, None, dict())
+
+
+    def test_simple_creation(self):
+        model_and_field_controls = analyze_mappers( MapperBase)
+        model_and_field_controls[OrderPart] = { 'order' : SKIP }
+        sqag1 = SQLAAutoGen( SQLATypeSupport, SQLADictTypeSupport)
+        sqag1.make_serializers( model_and_field_controls)
+
+        sqag2 = SQLAAutoGen( SQLADictTypeSupport, SQLATypeSupport)
+        sqag2.make_serializers( model_and_field_controls)
+
+        gencode = generated_code( sqag1.serializers + sqag2.serializers )
+        self.executed_code = dict()
+        print_code(gencode)
+        exec( compile( gencode, "<string>", "exec"), self.executed_code)
+
+        o = Order()
+        p1 = OrderPart()
+        p1.name = "part 1"
+        p1.operation = self._op
+        p2 = OrderPart()
+        p2.name = "part 2"
+        p2.operation = self._op
+        o.parts.append(p1 )
+        o.parts.append(p2 )
+
+        serialized = self.executed_code['serialize_Order_Order_to_dict']( o, None, dict())
+        pprint( serialized)
+
+        json.dumps(serialized)
+
+        with session.no_autoflush:
+            o = self.executed_code['serialize_Order_dict_to_Order']( serialized, None, session, dict())
+
+        session.commit()
+
+    # We skip that test because the situation it checks is super complicated
+    # and, for the momement, not supported by pyxfer...
+    @skip
+    def test_two_new_instances_are_double(self):
+        model_and_field_controls = analyze_mappers( MapperBase)
+        model_and_field_controls[OrderPart] = { 'order' : SKIP }
+        sqag1 = SQLAAutoGen( SQLATypeSupport, SQLADictTypeSupport)
+        sqag1.make_serializers( model_and_field_controls)
+
+        sqag2 = SQLAAutoGen( SQLADictTypeSupport, SQLATypeSupport)
+        sqag2.make_serializers( model_and_field_controls)
+
+        gencode = generated_code( sqag1.serializers + sqag2.serializers )
+        self.executed_code = dict()
+        print_code(gencode)
+        exec( compile( gencode, "<string>", "exec"), self.executed_code)
+
+        o = Order()
+        p = OrderPart()
+        # p appears twice in the data; so it will happen once in the dict
+        # version and anotehr one as a shortcut. But since it's PK has not been set, we
+        # must use some surrogate key :-)
+
+        o.parts.append(p )
+        o.parts.append( OrderPart())
+        o.parts.append(p )
+
+        serialized = self.executed_code['serialize_Order_Order_to_dict']( o, None, dict())
+        pprint( serialized)
+
+
+        with session.no_autoflush:
+            o = self.executed_code['serialize_Order_dict_to_Order']( serialized, None, session, dict())
+
+        assert o.order_id == None
+        assert len(o.parts) == 3, "len is {}".format(len(o.parts))
+        assert o.parts[0] != o.parts[1]
+        assert o.parts[2] != o.parts[1]
+        assert o.parts[0] == o.parts[2]
+        assert o.parts[0].order_part_id == None
+        assert o.parts[1].order_part_id == None
+        assert o.parts[2].order_part_id == None
+
+        session.rollback()
 
     #@skip
     def test_happy(self):
@@ -193,7 +326,7 @@ class Test(unittest.TestCase):
         # support. If you had imported the code, then you're dev
         # environement would auto complete, which is much easier.
 
-        serialized = self.executed_code['serialize_Order_Order_to_dict']( o, None)
+        serialized = self.executed_code['serialize_Order_Order_to_dict']( o, None, {})
         pprint( serialized)
 
         session.commit()
@@ -218,7 +351,7 @@ class Test(unittest.TestCase):
         # to it).
 
 
-        unserialized = self.executed_code['serialize_Order_dict_to_Order']( serialized, None, session)
+        unserialized = self.executed_code['serialize_Order_dict_to_Order']( serialized, None, session, dict())
         pprint( unserialized)
 
         # Note 2 : the serializer we propose is smart enough to reload
@@ -273,7 +406,7 @@ class Test(unittest.TestCase):
         # And of course, let's test it !
 
         o = session.query(Order).first()
-        serialized = self.executed_code['serialize_Order_Order_to_dict']( o, None)
+        serialized = self.executed_code['serialize_Order_Order_to_dict']( o, None, dict())
 
 
         # This is the expected result. Note the optimisation we do for
@@ -289,27 +422,23 @@ class Test(unittest.TestCase):
         # is :-))
 
         expected = {'cost': 0.0,
-                    'order_id': 1,
+                    'order_id': 10000,
                     'parts': [{'name': 'Part One',
                                'operation': {'name': 'lazer cutting', 'operation_id': 12},
                                'operation_id': 12,
-                               'order_id': 1,
+                               'order_id': 10000,
                                'order_part_id': 1},
                               {'name': 'Part Two',
-                               'operation': {'operation_id': 12},
+                               'operation': { '__PYX_REUSE': (12,) },
                                'operation_id': 12,
-                               'order_id': 1,
+                               'order_id': 10000,
                                'order_part_id': 2}],
                     'start_date': None}
 
-        r = canonize_dict( expected)
+        expected_cano = canonize_dict( expected)
         s = canonize_dict( serialized)
 
-        print(r)
-        print("-"*80)
-        print(s)
-
-        assert r == s
+        assert expected_cano == s, "Got\n {}; expected\n {}".format(s, expected_cano)
 
 if __name__ == "__main__":
 
