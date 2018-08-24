@@ -454,7 +454,7 @@ class ObjectTypeSupport(TypeSupport):
         self._relations = dict()
 
         if isinstance( obj_or_name, str):
-            self._name = "Copy" + obj_or_name
+            self._name = obj_or_name
             self._base_type = None
         else:
             #print("Breakpoint : {} aka {}".format( obj_or_name, obj_or_name.__name__))
@@ -630,7 +630,10 @@ class SQLADictTypeSupport(DictTypeSupport):
         serializer.append_code("if '__PYX_REUSE' in {}:".format( source_instance_name))
         serializer.indent_right()
         serializer.append_code("v = {}['__PYX_REUSE']".format( source_instance_name))
-        serializer.append_code("if type(v) == tuple:".format( source_instance_name))
+        # If nto a tuple, it can be an int, a float, a string, whatever...
+        # when dict stays in memory, it's more likely tuples. When they
+        # are deserialized from json, they become arrays...
+        serializer.append_code("if type(v) in (list, tuple):".format( source_instance_name))
         serializer.indent_right()
         serializer.append_code("{} = ('{}',) + v".format(
             cache_key_var,
@@ -721,7 +724,7 @@ class SQLADictTypeSupport(DictTypeSupport):
         for k_name in key_fields:
             key_parts_extractors.append( type_support.gen_read_field( instance_name, k_name))
 
-        return "({})".format( ",".join(key_parts_extractors))
+        return "({},)".format( ",".join(key_parts_extractors))
 
     def gen_peek( self, source_instance_name : str, cache_var : str):
         return "peek( {}, {})".format( source_instance_name, cache_var)
