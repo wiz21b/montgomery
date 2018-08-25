@@ -635,7 +635,7 @@ class SQLADictTypeSupport(DictTypeSupport):
         # are deserialized from json, they become arrays...
         serializer.append_code("if type(v) in (list, tuple):".format( source_instance_name))
         serializer.indent_right()
-        serializer.append_code("{} = ('{}',) + v".format(
+        serializer.append_code("{} = ('{}',) + tuple(v)".format(
             cache_key_var,
             cache_base_name))
         serializer.indent_left()
