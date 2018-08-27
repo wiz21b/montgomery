@@ -5,7 +5,7 @@ import logging
 from unittest import skip
 from pprint import pprint, PrettyPrinter
 
-from pyxfer.pyxfer import SQLAWalker, SKIP, generated_code, SQLAAutoGen, analyze_mappers
+from pyxfer.pyxfer import SQLAWalker, SKIP, generated_code, SQLAAutoGen, find_sqla_mappers
 from pyxfer.type_support import SQLADictTypeSupport, SQLATypeSupport, ObjectTypeSupport
 
 logging.getLogger("pyxfer").setLevel(logging.DEBUG)
@@ -66,6 +66,12 @@ def print_code( gencode : str):
 
 
 def rename_ids( d, new_id):
+    # Since ID's (in seriliazed dict's) are based on python id(...),
+    # they differ from a python to another. That's no problem for
+    # execution, but that'sone problem when writing expected. Here, we
+    # tame those values.
+
+    # FIXME : REUSE tags not handled !!!
 
     if type(d) == dict:
         if SQLADictTypeSupport.ID_TAG in d:
@@ -130,12 +136,16 @@ class Test(unittest.TestCase):
         session.commit()
 
     def _gen_code( self, source_ts, dest_ts):
-        model_and_field_controls = analyze_mappers( MapperBase)
+        model_and_field_controls = find_sqla_mappers( MapperBase)
+
+        # Avoid infinite recursion
         model_and_field_controls[OrderPart] = { 'order' : SKIP }
 
+        # Serialization one way
         sqag1 = SQLAAutoGen( source_ts, dest_ts)
         sqag1.make_serializers( model_and_field_controls)
 
+        # Serialization in the opposite direction
         sqag2 = SQLAAutoGen( dest_ts, source_ts)
         sqag2.make_serializers( model_and_field_controls)
 
@@ -170,6 +180,25 @@ class Test(unittest.TestCase):
         assert o.parts[1].name == "Part Two"
         assert o.parts[2].name == "part 3"
 
+    def test_update_object( self):
+        self._gen_code(SQLATypeSupport, ObjectTypeSupport)
+        o = session.query(Order).filter(Order.order_id == 10000).one()
+        s = self.executed_code['serialize_Order_Order_to_CopyOrder']( o, None, dict())
+        session.commit()
+
+        s.parts[0].name = "Changed"
+
+        with session.no_autoflush:
+            o = session.query(Order).filter(Order.order_id == 10000).one()
+            s = self.executed_code['serialize_Order_CopyOrder_to_Order']( s, o, session, dict())
+        session.commit()
+
+        # update what needs to
+        assert o.parts[0].name == "Changed"
+
+        # not updated the rest
+        assert len(o.parts) == 2
+        assert o.parts[1].name == "Part Two"
 
     def test_load_object(self):
         self._gen_code(SQLATypeSupport, ObjectTypeSupport)
@@ -183,7 +212,8 @@ class Test(unittest.TestCase):
         assert type(s) == self.executed_code['CopyOrder']
         assert type(s.parts[0]) == self.executed_code['CopyOrderPart']
 
-        p = self.executed_code['CopyOrderPart']()
+
+        p = self.executed_code['CopyOrderPart']() # Create new CopyOrderPart object
         p.name = 'Part Three'
         p.order_id = s.order_id # Pyxfer doesn't find this alone :-(
         s.parts.append(p)
@@ -200,7 +230,7 @@ class Test(unittest.TestCase):
         assert len(o.parts) == 3
 
     def test_simple_creation(self):
-        model_and_field_controls = analyze_mappers( MapperBase)
+        model_and_field_controls = find_sqla_mappers( MapperBase)
         model_and_field_controls[OrderPart] = { 'order' : SKIP }
         sqag1 = SQLAAutoGen( SQLATypeSupport, SQLADictTypeSupport)
         sqag1.make_serializers( model_and_field_controls)
@@ -237,7 +267,7 @@ class Test(unittest.TestCase):
     # and, for the momement, not supported by pyxfer...
     @skip
     def test_two_new_instances_are_double(self):
-        model_and_field_controls = analyze_mappers( MapperBase)
+        model_and_field_controls = find_sqla_mappers( MapperBase)
         model_and_field_controls[OrderPart] = { 'order' : SKIP }
         sqag1 = SQLAAutoGen( SQLATypeSupport, SQLADictTypeSupport)
         sqag1.make_serializers( model_and_field_controls)
@@ -397,7 +427,7 @@ class Test(unittest.TestCase):
         # Note that the autogen functions won't recurse through your
         # mappers automatically.
 
-        model_and_field_controls = analyze_mappers( MapperBase)
+        model_and_field_controls = find_sqla_mappers( MapperBase)
 
         # Let's specify things a bit more. In this case we don't
         # want order to be serialized as a part of an OrderPart
@@ -452,7 +482,7 @@ class Test(unittest.TestCase):
                                'order_id': 10000,
                                'order_part_id': 1},
                               {'name': 'Part Two',
-                               'operation': { '__PYX_REUSE': (12,) },
+                               'operation': { '__PYXPTR': (12,) },
                                'operation_id': 12,
                                'order_id': 10000,
                                'order_part_id': 2}],

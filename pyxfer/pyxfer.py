@@ -119,9 +119,6 @@ class TypeSupport:
     def check_instance_serializer( self, serializer : 'Serializer', dest_instance_name : str):
         pass
 
-    def gen_peek( self, cache_var : str, source_instance_name : str):
-        return "None"
-
     def cache_key( self, serializer : 'Serializer', key_var : str, source_instance_name : str, cache_base_name : str):
         """ Builds code to compute the key that will be used
         to cache serialization results. If the results must
@@ -151,7 +148,7 @@ class TypeSupport:
                       rel_source_type_support,
                       serializer_call_code,
                       walk_type,
-                      base_cache_name):
+                      cache_base_name):
 
         """ This will return a function that can build the code to serialize
         *to* the relation named @relation_name of an object represented
@@ -737,7 +734,7 @@ class SQLAWalker:
                 fk_name = next(iter(getattr( base_type, relation_name).property.local_columns)).name
 
                 # This is tricky. The first part of the if ensures
-                # there is a child to serializez. The presence of the
+                # there is a child to serialize. The presence of the
                 # child is reprsented by the existence of an object.
 
                 serializer.append_code( "if ({}):".format(
@@ -854,7 +851,7 @@ def generated_code( serializers : list) -> str:
 
     global_code_fragments = [ set() ]
 
-    # Group code fragements, deduplicates them and
+    # Group code fragments, deduplicates them and
     # preserve intra-group order.
 
     for ts in sorted( type_supports, key=lambda ts:ts.type_name()):
@@ -1062,7 +1059,7 @@ class SQLAAutoGen:
     def serializers(self):
         return list( self._serializers.values())
 
-def analyze_mappers( mapper : 'class'):
+def find_sqla_mappers( mapper : 'class'):
     d = dict()
     for c in _find_subclasses( mapper):
         d[c] = {}
