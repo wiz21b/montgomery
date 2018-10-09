@@ -1,7 +1,15 @@
 import logging
+import typing
 from datetime import datetime
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import ColumnProperty
+
+SKIP = "!skip"
+USE = "use"
+CLEAR_APPEND = "by append"
+REPLACE = "by index"
+FACTORY = "FACTORY"
+
 
 def _make_default_logger() -> logging.Logger:
     # Func to hide local values
@@ -39,7 +47,7 @@ class CodeWriter:
 
     def insert_code(self, lines, ndx, indentation_level = 0):
         if type(lines) == str:
-            lines = [lines]
+            lines = lines.split('\n')
         elif type(lines) == list:
             pass
         elif isinstance( lines, CodeWriter):
@@ -94,6 +102,7 @@ class TypeSupport:
 
     def __init__( self, logger : logging.Logger = _default_logger):
         self._logger = logger
+        self.additional_global_code = CodeWriter()
 
     def type(self) -> str:
         """ The type managed by this TypeSupport.
@@ -275,10 +284,6 @@ class TypeSupport:
 
 
 
-SKIP = "!skip"
-CLEAR_APPEND = "by append"
-REPLACE = "by index"
-FACTORY = "FACTORY"
 
 class Serializer(CodeWriter):
     """ Holds the code that will implement a serializer. The code kept by the
@@ -387,7 +392,7 @@ class Serializer(CodeWriter):
         # define what to serialize to. We just expect "serialize(X)" to give
         # us a serialized thing, such as a dict.
 
-        make_instance = self.destination_type_support.make_instance_code("destination")
+        make_instance = self.destination_type_support.gen_create_instance()
         if make_instance:
             self.append_code( "if destination is None:")
             self.indent_right()
@@ -454,14 +459,25 @@ def sqla_attribute_analysis( model, logger : logging.Logger = _default_logger):
 
     # Warning ! Some column properties are read only !
     fnames = [prop.key for prop in inspect(model).iterate_properties
-              if isinstance(prop, ColumnProperty)]
+              if isinstance(prop, ColumnProperty) ]
 
     ftypes = dict()
     for fname in fnames:
-
         t = inspect( getattr(model, fname)).type
         # print( type( inspect( getattr(model, fname)).type))
         ftypes[fname] = type(t)
+
+    # Python properties
+    python_props = [name for name,value in vars(model).items() if isinstance(value, property)]
+
+    for name,value in vars(model).items():
+        if isinstance(value, property):
+            getter_method = typing.get_type_hints(value.getter)
+            if 'return' in getter_method:
+                ftypes[name] = getter_method['return']
+            else:
+                ftypes[name] = "type unkown"
+
 
     #print(ftypes)
     single_rnames = dict()
@@ -666,6 +682,10 @@ class SQLAWalker:
             else:
                 fields_to_copy.append( field)
 
+        # for f,fc in fields_control.items():
+        #     if type(fc) == CodeWriter:
+        #         dest_type_support._func_fields[field] = fc
+
         # Whatever the result of the cache, we'll have to serialize at least
         # the values  of the key fields.
 
@@ -712,7 +732,7 @@ class SQLAWalker:
         # Some sanity check
 
         for name in fields_control: # Bug! this should look at relations only
-            if (name not in relations) and (name not in single_rnames) and (name not in fields_names):
+            if (name not in relations) and (name not in single_rnames) and (name not in fields_names) and (name in fields_control and type(fields_control[name]) != CodeWriter):
                 raise Exception("The relation or field {}.{} you use in a field control doesn't exist. We know these : {}.".format( base_type.__name__, name, ','.join( list(relations.keys()) + list(single_rnames.keys()))))
 
 
@@ -834,7 +854,7 @@ class SQLAWalker:
         return serializer
 
 
-def generated_code( serializers : list) -> str:
+def generated_code( serializers : list, additional_global_code : CodeWriter = CodeWriter()) -> str:
     """ Generate the code held in the serializers.
     Call this once you've got all your serializer ready.
 
@@ -849,7 +869,8 @@ def generated_code( serializers : list) -> str:
 
     #scode.append("cache = dict()")
 
-    global_code_fragments = [ set() ]
+    global_code_fragments = [ set( ) ]
+    global_code_fragments[0].add( additional_global_code.generated_code())
 
     # Group code fragments, deduplicates them and
     # preserve intra-group order.
@@ -891,8 +912,8 @@ class SQLAAutoGen:
     It is tuned for SQLAlchemy objects.
     """
 
-    def __init__(self, source_ts,
-                 dest_ts,
+    def __init__(self, source_ts : TypeSupport,
+                 dest_ts : TypeSupport,
                  logger : logging.Logger = _default_logger):
         """ The TypeSupport provided are expected to have
         parameter-less constructors.
@@ -932,18 +953,20 @@ class SQLAAutoGen:
         return s
 
     def make_serializers( self, models_fc, series_name = None):
-        """ Generate serializers for a collection of models.
+        """Generate serializers for a collection of models.
 
-        Returns a dict mapping SQLA mappers to their serializers.
+        Returns a dict mapping SQLA mappers to their Serializer
+        objects.
 
         models_fc : a dict containing SQLAclhemy mappers as keys
                     and "controls" that describe how to handle their
                     fields as value. Fields which are not described
                     in the controls are automatically serialized.
+
         """
 
         if series_name is not None:
-            print( sorted( [ "{} series:{}".format(c[0].__name__, c[1]) for c in self._serializers.keys()]))
+            self._logger.debug( sorted( [ "{} series:{}".format(c[0].__name__, c[1]) for c in self._serializers.keys()]))
 
         serializers = dict()
 
@@ -1011,9 +1034,18 @@ class SQLAAutoGen:
                         fc[relation_name] = self._serializers[ k_alternate]
 
                     else:
-                        dbg_missing_deps.append( "{}.{} of type {}".format(
-                            base_type.__name__, relation_name, relation_target.__name__))
+                        msg = "{}.{} of type {}".format(
+                            base_type.__name__, relation_name, relation_target.__name__)
+                        dbg_missing_deps.append( msg)
                         has_unsatisfied_deps = True
+
+                        self._logger.debug( serializers)
+                        self._logger.debug( self._serializers)
+                        self._logger.debug( k)
+                        self._logger.debug( k_alternate)
+                        self._logger.debug( msg)
+
+                        #exit()
                         # I could break out of the loop, but I let it
                         # go so that the missing deps array is
                         # completely built, which in turn will improve
@@ -1042,8 +1074,12 @@ class SQLAAutoGen:
             if not serializers_made:
                 self._logger.debug( "serializers : {}".format( str( serializers)))
                 self._logger.debug( "to do next  : {}".format( str( do_later)))
-                self._logger.debug( "missing deps: {}".format( dbg_missing_deps))
-                raise Exception("Why building series '{}', don't know what to do with these fields : {}. Did you give all mappers ?".format( series_name, ", ".join( sorted( dbg_missing_deps))))
+                self._logger.error( "missing deps: {}".format( dbg_missing_deps))
+
+                msg = ""
+                if series_name:
+                    msg = " (while building series '{}')".format(series_name)
+                raise Exception("Don't know what to do with these fields : {}{}. Maybe I don't know wabout these mappers ?".format( ", ".join( sorted( dbg_missing_deps)), msg))
 
             do_now = do_later
             do_later = dict()
@@ -1060,13 +1096,23 @@ class SQLAAutoGen:
         return list( self._serializers.values())
 
 def find_sqla_mappers( mapper : 'class'):
+    base_mapper_direct_children = [sc for sc in mapper.__subclasses__()]
+
     d = dict()
-    for c in _find_subclasses( mapper):
-        d[c] = {}
+
+    for direct_child in base_mapper_direct_children:
+        for c in _find_subclasses( direct_child):
+            d[c] = {}
+
     return d
 
 def _find_subclasses( cls):
-    results = []
-    for sc in cls.__subclasses__():
-        results.append(sc)
-    return results
+    # Handle SQLA inherited entities definitions
+
+    if cls.__subclasses__():
+        results = [ cls ]
+        for sc in cls.__subclasses__():
+            results.extend( _find_subclasses(sc))
+        return results
+    else:
+        return [cls]

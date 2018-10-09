@@ -20,15 +20,21 @@ def gen_merge_relation_sqla(serializer : Serializer,
     """Generates the code that will read a given relation in a source
     object (accessed via @relation_source_expr) and merge its content
     into a corresponding relation in a destination object accessed via
-    @relation_dest_expr). Each item of the collection will be serialized
-    individually with code given by @serializer_call_code.
+    @relation_dest_expr). By merging, we mean that we'll add/remove
+    items from the relation in the corresponding object (we won't
+    create a brand new relation and stick it in the destination, we'll
+    use the one from the destination).
 
-    The objects in the source relation are described by @rel_source_type_support.
-    The objects in the destination relation are described by @rel_dest_type_support.
+    Each item of the collection will be serialized individually with
+    code given by @serializer_call_code.
 
-    The type of the relation representation is in @collection_class (set-based
-    relations don't work exactly like list-based relations).
+    The objects in the source relation are described by
+    @rel_source_type_support.  The objects in the destination relation
+    are described by @rel_dest_type_support.
 
+    The type of the relation representation is in @collection_class
+    (set-based relations don't work exactly like list-based
+    relations).
     """
 
     serializer.append_code("# Keep track of added/updated items.")
@@ -149,17 +155,12 @@ class SQLATypeSupport(TypeSupport):
     def type_name(self):
         return self._model.__name__
 
-    def make_instance_code(self, destination):
-        return "{}()".format( self.type_name())
 
     def fields(self):
         return self._fields.keys()
 
     def relations(self):
         return self.rnames
-
-    def field_type(self, field_name):
-        return self._fields[field_name]
 
     def field_read_code(self, repr, field_name):
         return "{}.{}".format(repr, field_name)
@@ -187,6 +188,9 @@ class SQLATypeSupport(TypeSupport):
 
     def gen_read_relation( self, instance, relation_name):
         return "{}.{}".format(instance, relation_name)
+
+    def make_instance_code(self, destination):
+        return "{}()".format( self.type_name())
 
     def gen_create_instance(self):
         return "_sqla_session_add( session, {}())".format(self.type_name())
@@ -241,6 +245,9 @@ class SQLATypeSupport(TypeSupport):
 
 
 class DictTypeSupport(TypeSupport):
+    """ A type support to represent entities as dictionaries.
+    """
+
     def __init__(self, base_type = None):
         # We don't need the base_type
         pass
@@ -256,9 +263,6 @@ class DictTypeSupport(TypeSupport):
 
     def relations(self):
         return []
-
-    def field_type(self, field_name):
-        return str
 
     def make_instance_code(self, destination):
         return "{}()".format( self.type_name())
@@ -321,8 +325,15 @@ class DictTypeSupport(TypeSupport):
 
 
 class ObjectTypeSupport(TypeSupport):
+    """ A type support for plain python object.
+    """
 
     def __init__(self, obj_or_name):
+
+        assert obj_or_name
+
+        super().__init__()
+
         self._fields = set()
         self._relations = dict()
 
@@ -343,27 +354,25 @@ class ObjectTypeSupport(TypeSupport):
     def gen_create_instance(self) -> str:
         return "{}()".format( self.type_name())
 
-    def field_type(self, field_name):
-        return str
-
-    def make_instance_code(self, destination):
-        return "{}()".format( self.type_name())
-
     def gen_global_code(self) -> CodeWriter:
         cw = CodeWriter()
 
-        if True or self._base_type is None:
-            cw.append_code("class {}:".format(self._name))
-            cw.append_code("    def __init__(self):".format(self._name))
-            for f in self._fields:
-                cw.append_code("        self.{} = None".format(f))
+        cw.append_code("class {}:".format(self._name))
 
-            if self._relations:
-                for r,type_ in self._relations.items():
-                    cw.append_code("        self.{} = {}".format(r,type_))
-            else:
-                cw.append_code("        # no relations")
+        cw.indent_right()
+        cw.append_code( self.additional_global_code)
 
+        cw.append_code("def __init__(self):".format(self._name))
+        for f in self._fields:
+            cw.append_code("    self.{} = None".format(f))
+
+        if self._relations:
+            for r,type_ in self._relations.items():
+                cw.append_code("    self.{} = {}".format(r,type_))
+        else:
+            cw.append_code("    # no relations")
+
+        cw.indent_left()
         return cw
 
 
