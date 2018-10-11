@@ -555,13 +555,7 @@ class SQLAWalker:
     """
 
     def __init__(self, logger : logging.Logger = _default_logger):
-
         self._logger = logger
-        self.serializers = {}
-
-        # self._all_type_supports = set()
-
-
 
     def _field_copy( self, serializer : Serializer,
                      source_type_support : TypeSupport, source_instance : str,
@@ -599,9 +593,11 @@ class SQLAWalker:
              dest_type_support : TypeSupport,
              fields_control = {}, serializer_name : str = None) -> Serializer:
 
-        """ Creates code to copy from a source type to a dest type.
-        Actually creates a Serializer which will be able to produce the code.
+        """Creates code to copy from a source type to a dest type, following
+        a plan dictated by a base_type and fields_control.  Actually
+        creates a Serializer which will be able to produce the code.
         The base type is used to guide the walking process.
+
         We *do not* recurse through the relations.
 
         Fields controls indicate what to to with each field.
@@ -613,6 +609,8 @@ class SQLAWalker:
           In this case, the field is expected to be a (SQLAlhemy) relationship.
 
         """
+
+        serializers = {}
 
         if source_type_support is None:
             source_type_support = self.source_factory.get_type_support( base_type)
@@ -635,10 +633,10 @@ class SQLAWalker:
 
         self._logger.debug("Registering serializer {} {}".format(source_type_support, serializer.func_name()))
 
-        if serializer.func_name() in self.serializers:
+        if serializer.func_name() in serializers:
             raise Exception("Looks like you define the same serializer twice : from {} to {} following a schema defined by {} (serializer function is '{}'(...)). Maybe you should use qualify the name further (using series name)".format( serializer.source_type_support, serializer.destination_type_support, serializer.base_type_name, serializer.func_name()))
 
-        self.serializers[ serializer.func_name() ] = serializer
+        serializers[ serializer.func_name() ] = serializer
 
         fields, relations, single_rnames, knames = sqla_attribute_analysis(base_type)
 
@@ -919,33 +917,44 @@ class SQLAAutoGen:
         parameter-less constructors.
         """
 
-        assert source_ts and dest_ts,"Missing type support"
-        assert source_ts != dest_ts, "Serializing from one type to itself doesn't make sense"
-
         self._logger = logger
-
-        self._base_source_ts = source_ts
-        self._base_dest_ts = dest_ts
 
         # We use TypeSupport factories to reuse instances of the TypeSupports
         # This allows the type supports to generate code more
         # efficiently (else they will generate the same code
         # often).
         self._ts_factories = dict()
-        self._ts_factories[source_ts] = TypeSupportFactory( source_ts, logger)
-        self._ts_factories[dest_ts] = TypeSupportFactory( dest_ts, logger)
 
-        self.source_factory = TypeSupportFactory( source_ts, logger)
-        self.dest_factory = TypeSupportFactory( dest_ts, logger)
         self.walker = SQLAWalker()
 
         # Where we'll store the serializers we'll produce.
         self._serializers = dict()
 
+        self.set_type_supports( source_ts, dest_ts)
+
+    def set_type_supports( self, source_ts, dest_ts):
+        assert source_ts and dest_ts,"Missing type support"
+        assert source_ts != dest_ts, "Serializing from one type to itself doesn't make sense"
+
+        self._base_source_ts = source_ts
+        self._base_dest_ts = dest_ts
+
+        if self._base_source_ts not in self._ts_factories:
+            self._ts_factories[self._base_source_ts] = TypeSupportFactory( source_ts, self._logger)
+
+        if self._base_dest_ts not in self._ts_factories:
+            self._ts_factories[self._base_dest_ts] = TypeSupportFactory( dest_ts, self._logger)
+
+    def reverse(self):
+        self._base_source_ts,self._base_dest_ts = self._base_dest_ts,self._base_source_ts
+
+    def type_support(self, base):
+        return self._ts_factories[self._base_dest_ts].get_type_support( base)
+
     def _make_serializer( self, type_, fields_control, serializer_name : str = None):
 
-        source_type_support = self.source_factory.get_type_support( type_)
-        dest_type_support = self.dest_factory.get_type_support( type_)
+        source_type_support = self._ts_factories[self._base_source_ts].get_type_support( type_)
+        dest_type_support = self._ts_factories[self._base_dest_ts].get_type_support( type_)
 
         s = self.walker.walk( source_type_support, type_,
                               dest_type_support, fields_control,
@@ -984,7 +993,11 @@ class SQLAAutoGen:
         # The following code makes sure the serializers are built in
         # the right order (remember serializers depend on each other
         # thus their definition order is important). This not trivial
-        # and helps a lot while declaring fields controls.
+        # and helps a lot while declaring fields controls (because
+        # the user can declare them in any order).
+
+        # At this point, models_fc contains all the SQLA models we
+        # want to serialize.
 
         do_now = dict(models_fc)
         do_later = dict()
