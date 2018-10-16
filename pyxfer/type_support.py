@@ -7,6 +7,8 @@ from pyxfer.pyxfer  import _default_logger, TypeSupport, Serializer, CodeWriter,
 
 
 
+
+
 def gen_merge_relation_sqla(serializer : Serializer,
                             relation_source_expr : str,
                             relation_dest_expr : str,
@@ -110,26 +112,27 @@ class SQLATypeSupport(TypeSupport):
                 fields[f] = int
         self._fields = fields
 
-    def finish_serializer(self, serializer):
-        """ What to do at the end of a serializer which produces instances
-        of the type described by this TypeSupport.
-        """
-        pass
-
-
     def check_instance_serializer(self, serializer, dest : str):
         # check if key is not empty
         serializer.append_code( "# Merging into SQLA session. We do that after")
         serializer.append_code( "# having filled all the fields so that")
         serializer.append_code( "# SQLA will copy them efficiently")
-        serializer.append_code( "{} = session.merge({})".format( dest, dest))
+        serializer.append_code( "if {} not in session:".format(dest))
+        serializer.append_code( "    {} = session.merge({})".format(dest, dest))
 
     def gen_global_code(self) -> CodeWriter:
         cw = CodeWriter()
+
         cw.append_code("from sqlalchemy.orm.session import Session")
-        cw.append_code("def _sqla_session_add( session : Session, inst):")
-        cw.append_code("    session.add( inst)")
-        cw.append_code("    return inst")
+        cw.append_code("def _sqla_session_add( session : Session, klass, kt):")
+        cw.append_code("   from sqlalchemy import inspect")
+        cw.append_code("   key = inspect( klass).identity_key_from_primary_key( kt )")
+        cw.append_code("   if key in session.identity_map:")
+        cw.append_code("       return session.identity_map[key]")
+        cw.append_code("   else:")
+        # will be merged later
+        cw.append_code("       dest = klass()")
+        cw.append_code("       return dest")
 
         cw2 = CodeWriter()
 
@@ -192,8 +195,8 @@ class SQLATypeSupport(TypeSupport):
     def make_instance_code(self, destination):
         return "{}()".format( self.type_name())
 
-    def gen_create_instance(self):
-        return "_sqla_session_add( session, {}())".format(self.type_name())
+    def gen_create_instance(self, key_tuple_code) -> str:
+        return "_sqla_session_add( session, {}, {})".format(self.type_name(), key_tuple_code)
 
     def serializer_additional_parameters(self):
         return ["session : Session"]
@@ -211,8 +214,9 @@ class SQLATypeSupport(TypeSupport):
         relation_source_expr = source_ts.gen_read_relation( source_instance_name,relation_name)
         relation_dest_expr = dest_ts.gen_read_relation( dest_instance_name,relation_name)
 
-        #mainlog.debug("{} --> {}".format( source_ts, dest_ts))
-        #mainlog.debug(walk_type)
+        _default_logger.debug("{} --> {}".format( source_ts, dest_ts))
+        _default_logger.debug(walk_type)
+        _default_logger.debug(dest_ts.type())
 
         a = getattr( dest_ts.type(), relation_name).property
         if a.collection_class == set:
@@ -267,7 +271,7 @@ class DictTypeSupport(TypeSupport):
     def make_instance_code(self, destination):
         return "{}()".format( self.type_name())
 
-    def gen_create_instance(self):
+    def gen_create_instance(self, key_tuple_code) -> str:
         return "{}()".format( self.type_name())
 
     def field_read_code(self, expression, field_name):
@@ -351,7 +355,7 @@ class ObjectTypeSupport(TypeSupport):
     def type_name(self):
         return self._name
 
-    def gen_create_instance(self) -> str:
+    def gen_create_instance(self, key_tuple_code) -> str:
         return "{}()".format( self.type_name())
 
     def gen_global_code(self) -> CodeWriter:
@@ -375,7 +379,6 @@ class ObjectTypeSupport(TypeSupport):
         cw.indent_left()
         return cw
 
-
     def gen_write_field(self, instance, field, value):
         self._fields.add( field)
         return "{}.{} = {}".format(instance, field, value)
@@ -383,15 +386,12 @@ class ObjectTypeSupport(TypeSupport):
     def gen_basetype_to_type_conversion(self, field, code):
         return "{}".format( code)
 
-
     def gen_read_field(self, instance, field):
         self._fields.add( field)
         return "{}.{}".format(instance, field)
 
-
     def gen_type_to_basetype_conversion(self, field, code):
         return "{}".format(code)
-
 
     def gen_is_single_relation_present(self, instance, relation_name) -> str:
         return "{}.{}".format( instance, relation_name)
@@ -424,6 +424,8 @@ class ObjectTypeSupport(TypeSupport):
         serializer.indent_left()
         return
 
+    def __str__(self):
+        return "ObjectTypeSupport[{}]".format( self.type_name())
 
 
 
@@ -557,7 +559,7 @@ class SQLADictTypeSupport(DictTypeSupport):
         serializer.append_code( "# We use a PYXID only if it is necessary, that is, only if")
         serializer.append_code( "# an object has no primary/business key")
         serializer.append_code( "cache[cache_key] = {}".format(
-            self._make_cache_value_expression( self._key_names, source_type_support, source_instance_name, [ "'__PYX_REUSE' : id(source)" ])))
+            self._make_cache_value_expression( self._key_names, source_type_support, source_instance_name, [ "'{}' : id(source)".format( self.REUSE_TAG) ])))
 
         serializer.append_code( "dest['{}'] = id(source)".format( self.ID_TAG))
         serializer.indent_left()

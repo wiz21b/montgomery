@@ -214,7 +214,7 @@ class TypeSupport:
     def gen_read_relation(self, instance : str, relation_name : str) -> str:
         raise NotImplementedError()
 
-    def gen_create_instance(self) -> str:
+    def gen_create_instance(self, key_tuple_code : str) -> str:
         """ Generate code to create a new instance of the supported type.
         Note you can use self.type_name() to get the concrete type. """
         raise NotImplementedError()
@@ -243,44 +243,6 @@ class TypeSupport:
     def gen_relation_read_iteration(self, serializer, source_instance_name: str, relation_name: str):
         serializer.append_code("for item in {}: # copy from {}".format(
             self.gen_read_relation( source_instance_name, relation_name), self))
-
-
-    def gen_copy_sequence_relation(self, serializer, serializer_call_code, source_instance_name: str, relation_name: str,
-                                   rel_source_type_support, rel_dest_type_support, dest_instance_name : str, dest_rel_name : str):
-
-        """ Copy a relation 'relation_name' from an instance of source_ts into the corresponding
-        field of dest_ts.
-
-        The relation items in the source are represented by the source_rel_ts, they will be copied
-        into items represented by dest_rel_ts
-        """
-        """ Produce code that copies from the rel_source_type_support to rel_dest_type_support
-        for a relation 'relation_name' embedded in a self type support.
-
-        (it's done in this direction, because this knows how to structure data for itself
-        and that assumtion on read operation are much simpler)
-        """
-
-        self._logger.debug("TypeSupport: copying sequence '{}' in '{}' from {} to '{}'".format( relation_name, self, str(rel_dest_type_support), str(rel_source_type_support)))
-        # The source relation is expected to behave as an immutable sequence (basically it muse allow
-        # a "for" construct over it.
-
-        serializer.append_code("{}.clear() # {}".format(
-            self.gen_read_relation( dest_instance_name, dest_rel_name), self))
-
-        rel_source_type_support.relation_read_iterator(relation_name)( serializer, source_instance_name, relation_name)
-        # Now we're inside the source iteration, don't forget to indent in (and out!)
-        # The item we iterate over are named 'item'
-
-        serializer.indent_right()
-
-        serializer.append_code("# copy into {}".format(self))
-        serializer.append_code("{}.append( {})".format(
-            self.gen_read_relation( dest_instance_name, dest_rel_name),
-            serializer_call_code('item', rel_dest_type_support.gen_create_instance())))
-
-        serializer.indent_left()
-
 
 
 
@@ -392,7 +354,8 @@ class Serializer(CodeWriter):
         # define what to serialize to. We just expect "serialize(X)" to give
         # us a serialized thing, such as a dict.
 
-        make_instance = self.destination_type_support.gen_create_instance()
+        kt = extract_key_tuple( knames, None, source_type_support, "source")
+        make_instance = self.destination_type_support.gen_create_instance( kt)
         if make_instance:
             self.append_code( "if destination is None:")
             self.indent_right()
@@ -444,7 +407,6 @@ class TypeSupportFactory(AbstractTypeSupportFactory):
     def make_type_support(self, base_type):
         self._logger.debug("TypeSupportFactory : trying to make a '{}' with a '{}'".format(self._type_support_class, base_type))
         return self._type_support_class( base_type)
-
 
 
 def sqla_attribute_analysis( model, logger : logging.Logger = _default_logger):
@@ -508,33 +470,27 @@ def sqla_attribute_analysis( model, logger : logging.Logger = _default_logger):
 def make_cache_base_name( source_ts : TypeSupport, dest_ts : TypeSupport):
     return "{}_{}".format( source_ts.type_name(), dest_ts.type_name())
 
-def make_cache_key_expression( key_fields, cache_base_name, type_support : TypeSupport, instance_name):
+
+def extract_key_tuple( key_fields, cache_base_name, type_support : TypeSupport, instance_name):
+    """Build code that builds a tuple containing the key fields values of
+    an instance
+
+    """
+
     assert type(key_fields) == list and len(key_fields) > 0, "Wrong keys : {}".format( key_fields)
     assert isinstance( type_support, TypeSupport)
     assert type(instance_name) == str and len(instance_name) > 0
 
-    key_parts_extractors = [ "'{}'".format(cache_base_name)]
+    key_parts_extractors = []
+    if cache_base_name:
+        key_parts_extractors.append( "'{}'".format(cache_base_name))
+
     for k_name in key_fields:
         key_parts_extractors.append( type_support.gen_read_field( instance_name, k_name))
 
-    return "({})".format( ",".join(key_parts_extractors))
-
-    return "'{}{}'.format({})".format( cache_base_name,
-                                   "_{}" * len(key_parts_extractors),
-                                   ",".join( key_parts_extractors))
+    return "({},)".format( ",".join(key_parts_extractors))
 
 
-def extract_sqla_key( base_type, type_support : TypeSupport, instance_name : str):
-    """
-    base_type : a SQLA mapper
-    """
-
-    mapper = inspect( base_type)
-    k_names = [k.name for k in mapper.primary_key]
-    key_parts_extractors = []
-    for k_name in k_names:
-        key_parts_extractors.append( type_support.gen_read_field( instance_name, k_name))
-    return ", ".join( key_parts_extractors)
 
 
 class SQLAWalker:
@@ -641,6 +597,8 @@ class SQLAWalker:
         fields, relations, single_rnames, knames = sqla_attribute_analysis(base_type)
 
         # --- INSTANCE MANAGEMENT ---------------------------------------------
+
+        # serializer.append_code("print(\"*** DBG: {}\".format(str(source)[:500]))")
 
         # Caching
 
@@ -922,7 +880,8 @@ class SQLAAutoGen:
         # We use TypeSupport factories to reuse instances of the TypeSupports
         # This allows the type supports to generate code more
         # efficiently (else they will generate the same code
-        # often).
+        # often). This maps a TypeSupport class to a factory that
+        # creates instance of that TypeSupport.
         self._ts_factories = dict()
 
         self.walker = SQLAWalker()
@@ -948,8 +907,8 @@ class SQLAAutoGen:
     def reverse(self):
         self._base_source_ts,self._base_dest_ts = self._base_dest_ts,self._base_source_ts
 
-    def type_support(self, base):
-        return self._ts_factories[self._base_dest_ts].get_type_support( base)
+    def type_support(self, ts, base):
+        return self._ts_factories[ts].get_type_support( base)
 
     def _make_serializer( self, type_, fields_control, serializer_name : str = None):
 
@@ -1030,6 +989,10 @@ class SQLAAutoGen:
                     # analyze the relation
                     relation = getattr( base_type, relation_name)
                     relation_target = inspect(relation).mapper.class_
+
+                    if relation_target not in models_fc:
+                        raise Exception("For relation {}.{}, I don't know what to do with its target type : {}. You must skip that relation or tell me about its target type in the fields controls.".format( base_type, relation_name, relation_target))
+
                     self._logger.debug("Analyzing, in series '{}' of '{}', relation '{}' of type '{}'".format(
                         series_name, base_type, relation_name, relation_target))
 
