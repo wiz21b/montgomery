@@ -551,25 +551,27 @@ class SQLADictTypeSupport(DictTypeSupport):
         # they are both the same objects or they are different
         # objects. The __PYX_REUSE allows to remove this unknown.
 
+        serializer.append_code( "# We use the SQLA key because it's set.")
         serializer.append_code( "cache[cache_key] = {{ '{}' : ekey[1:] }}".format(
             self.REUSE_TAG))
         serializer.indent_left()
         serializer.append_code("else:")
         serializer.indent_right()
-        serializer.append_code( "# We use a PYXID only if it is necessary, that is, only if")
-        serializer.append_code( "# an object has no primary/business key")
+        serializer.append_code( "# No key set, we use id() to build one.")
         serializer.append_code( "cache[cache_key] = {}".format(
             self._make_cache_value_expression( self._key_names, source_type_support, source_instance_name, [ "'{}' : id(source)".format( self.REUSE_TAG) ])))
 
+        serializer.append_code( "# We use a {} only if it is necessary, that is, only if".format(self.ID_TAG))
+        serializer.append_code( "# an object has no primary/business key")
         serializer.append_code( "dest['{}'] = id(source)".format( self.ID_TAG))
         serializer.indent_left()
 
 
     def _make_cache_value_expression( self, key_fields, type_support : TypeSupport, instance_name, base_parts):
         parts = base_parts
-        for k_name in key_fields:
-            parts.append( "'{}' : {}".format(
-                k_name, type_support.gen_read_field( instance_name, k_name)))
+        # for k_name in key_fields:
+        #     parts.append( "'{}' : {}".format(
+        #         k_name, type_support.gen_read_field( instance_name, k_name)))
 
         return "{{ {} }}".format( ",".join( parts))
 
