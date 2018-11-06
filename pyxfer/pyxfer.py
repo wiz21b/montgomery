@@ -1,8 +1,9 @@
 import logging
-import typing
 from datetime import datetime
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import ColumnProperty
+from pyxfer.utils import sqla_attribute_analysis, _default_logger,  CodeWriter, merge_dicts
+from pyxfer.type_support import TypeSupport, TypeSupportFactory
 
 SKIP = "!skip"
 USE = "use"
@@ -11,239 +12,31 @@ REPLACE = "by index"
 FACTORY = "FACTORY"
 
 
-def _make_default_logger() -> logging.Logger:
-    # Func to hide local values
-    default_logger = logging.getLogger( "pyxfer") # FIXME shoudl use __name__, but it returns pyxfer.pyxfer
-    log_handler = logging.StreamHandler()
-    log_handler.setFormatter( logging.Formatter("[%(name)s %(asctime)s %(levelname)s] %(message)s"))
-    default_logger.addHandler( log_handler)
-    default_logger.setLevel( logging.CRITICAL + 1) # Hides every logs by default
-    return default_logger
-
-# Use this to enable logging in a clean way :
-# logging.getLogger("pyxfer").setLevel(logging.DEBUG)
-_default_logger = _make_default_logger()
-
-def merge_dicts(x, y):
-    """Given two dicts, merge them into a new dict as a shallow copy."""
-    z = x.copy()
-    z.update(y)
-    return z
-
-class CodeWriter:
-    def __init__(self):
-        self._code = [] # array of string
-        self._indentation = 0
-
-    def indent_right(self):
-        self._indentation += 1
 
 
-    def indent_left(self):
-        self._indentation -= 1
-
-        # if len(self._code) >= 1 and self._code[-1]:
-        #     self._code.append("")
-
-    def insert_code(self, lines, ndx, indentation_level = 0):
-        if type(lines) == str:
-            lines = lines.split('\n')
-        elif type(lines) == list:
-            pass
-        elif isinstance( lines, CodeWriter):
-            lines = lines._code
-        elif lines is None:
-            return
-        else:
-            raise Exception("Unexpected data")
-
-        for i in range( len( lines)):
-            line = lines[i]
-            self._code.insert( ndx+i, "    " * indentation_level + line)
-
-    def append_code(self, lines):
-        self.insert_code(lines, len(self._code), self._indentation)
-
-    def append_blank(self):
-        # Avoir double blanks
-        if len(self._code) >= 1 and self._code[-1].strip():
-            self.append_code("")
-
-    def generated_code(self):
-        return "\n".join(self._code)
-
-    def __str__(self):
-        return self.generated_code()
+def make_cache_base_name( source_ts : TypeSupport, dest_ts : TypeSupport):
+    return "{}_{}".format( source_ts.type_name(), dest_ts.type_name())
 
 
-class TypeSupport:
-    """
-    A type support class has the responsbility to
-    build *code fragments* to read/write/create instances of the
-    type it supports. It doesn't build code of a full blown
-    serializer (this is done by the @Serializer class).
 
-    By "read" we mean, read field values, read realtionships, etc.
-    Same goes for "write".
-
-    TypeSupport should be reusable for several classes (of the same type)
-    that share the TypeSupport class. That is, if one writes
-    a SQLAlchemy mapped class TypeSupport, then one should be
-    able to reuse that TypeSupport with various classes
-    that are mapped with SQLA. In this case, the TypeSupportFactory
-    base class should be considered.
-
-    The TypeSupport can alwyas be specialized for some
-    scenarios. That is, if one makes a TypeSupport that
-    handle regular objects, then, afterwards, one can make a specific
-    TypeSupport for objects having special characteristics.
+def extract_key_tuple( key_fields, cache_base_name, type_support : TypeSupport, instance_name):
+    """Build code that builds a tuple containing the key fields values of
+    an instance
 
     """
 
-    def __init__( self, logger : logging.Logger = _default_logger):
-        self._logger = logger
-        self.additional_global_code = CodeWriter()
+    assert type(key_fields) == list and len(key_fields) > 0, "Wrong keys : {}".format( key_fields)
+    assert isinstance( type_support, TypeSupport)
+    assert type(instance_name) == str and len(instance_name) > 0
 
-    def type(self) -> str:
-        """ The type managed by this TypeSupport.
-        """
-        raise NotImplementedError("Class {} misses a method".format(self.__class__.__name__))
+    key_parts_extractors = []
+    if cache_base_name:
+        key_parts_extractors.append( "'{}'".format(cache_base_name))
 
-    def type_name(self) -> str:
-        """ The name of the type managed by this TypeSupport.
-        """
-        raise NotImplementedError()
+    for k_name in key_fields:
+        key_parts_extractors.append( type_support.gen_read_field( instance_name, k_name))
 
-    def relation_read_iterator( self, relation_name : str):
-        # By default the iterator works over immutable sequence-like objects;
-
-        return self.gen_relation_read_iteration
-
-    def finish_serializer(self, serializer : 'Serializer'):
-        """ What to do at the end of a serializer which produces instances
-        of the type described by this TypeSupport.
-        """
-        pass
-
-    def check_instance_serializer( self, serializer : 'Serializer', dest_instance_name : str):
-        pass
-
-    def cache_key( self, serializer : 'Serializer', key_var : str, source_instance_name : str, cache_base_name : str):
-        """ Builds code to compute the key that will be used
-        to cache serialization results. If the results must
-        not be cached (once or never), the generated expression
-        must evaluate to None.
-        """
-
-        # Default implementation, may not work for every
-        # scenarios (see DictTypeSupport for example).
-
-        serializer.append_code( "{} = (\"{}\", id({}))".format( key_var, cache_base_name, source_instance_name))
-
-
-    def cache_on_write(self, serializer : 'Serializer', source_type_support, source_instance_name, cache_base_name, dest_instance_name):
-
-        # Default implementation, may not work for every
-        # scenarios (see DictTypeSupport for example).
-
-        #serializer.append_code("print('caching : key={{}}, data={{}}'.format(cache_key,{}))".format( dest_instance_name))
-        serializer.append_code("cache[cache_key] = {}".format( dest_instance_name))
-
-
-
-    def relation_copy(self, serializer : 'Serializer',
-                      source_instance_name : str, dest_instance_name : str, relation_name,
-                      source_ts, dest_ts,
-                      rel_source_type_support,
-                      serializer_call_code,
-                      walk_type,
-                      cache_base_name):
-
-        """ This will return a function that can build the code to serialize
-        *to* the relation named @relation_name of an object represented
-        by this TypeSupport.
-
-        To generate the code, we use various informations :
-        - relation_name : the name of the relation we copy, we expect that name
-          to be the same in the source and destination object.
-        - dest_instance_name : the name of the object to which the relation
-          will be copied. We will basically generate code that copies to
-          "dest_instance_name"."relation_name".
-        - source_instance_name : the name of the object from which the relation
-          will be copied. We will basically generate code that copies from
-          "source_instance_name"."relation_name".
-        - dest_ts : the @TypeSupport describing the destination object where we'll
-          copy the relation to.
-        - source_ts : the @TypeSupport describing the source object where we'll
-          read the relation from.
-        - rel_source_type_support : the @TypeSupport describing the objects which
-          are in the source relation. So we'll make code that transforms
-          those objects into the objects of the destination relation.
-        - rel_dest_type_support : the @TypeSupport describing the objects which
-          are in the destination relation.
-
-        """
-
-        raise NotImplementedError()
-
-
-    def gen_write_field(self, instance, field, value) -> str:
-        raise NotImplementedError()
-
-    def gen_is_single_relation_present(self, instance, relation_name) -> str:
-        """ Returns an expression that evaluate to True if a
-        a single item relation (ie a one-to-one relation, for example
-        an irder has one customer) is present as a relation
-        (e.g. the data of the customer appear inside the
-        data of the order, which is not, a customer_id in an
-        order object).
-
-        This is used to optimize a situation where one makes
-        a reference (using for ex. a customer_id field inside an order)
-        instead of a full copy of an object (using for ex. a
-        customer object inside an order)
-
-        FIXME This is so unclear I wonder why it's necessary.
-        """
-
-        raise NotImplementedError()
-
-    def gen_read_field(self, instance : str, field : str) -> str:
-        raise NotImplementedError()
-
-    def gen_read_relation(self, instance : str, relation_name : str) -> str:
-        raise NotImplementedError()
-
-    def gen_create_instance(self, key_tuple_code : str) -> str:
-        """ Generate code to create a new instance of the supported type.
-        Note you can use self.type_name() to get the concrete type. """
-        raise NotImplementedError()
-
-    def serializer_additional_parameters(self):
-        """ Additional parameters to be passed to the serializer
-        so that the code generated by this TypeSupport can be
-        use it.
-
-        Returns an array of parameters declaration. For example,
-        in SQLAlchemy, [ "session : Session" ] makes sense in a lot
-        of places.
-        """
-
-        return [] # Default value here because add. params are not frequent.
-
-
-    def gen_global_code(self) -> CodeWriter:
-        return CodeWriter()
-
-    def gen_merge_relation(self, serializer, serializer_call_code, source_instance_name: str, relation_name: str,
-                           source_type_support, dest_instance_name : str, dest_rel_name : str):
-        raise NotImplementedError()
-
-
-    def gen_relation_read_iteration(self, serializer, source_instance_name: str, relation_name: str):
-        serializer.append_code("for item in {}: # copy from {}".format(
-            self.gen_read_relation( source_instance_name, relation_name), self))
-
+    return "({},)".format( ",".join(key_parts_extractors))
 
 
 
@@ -370,125 +163,9 @@ class Serializer(CodeWriter):
 
 
 
-class AbstractTypeSupportFactory:
-    """ Abstract class to inherit TypeSupport factories from.
-
-    Note that we cache the Typesupport we create.
-    """
-
-    def __init__(self, logger : logging.Logger = _default_logger):
-        self._logger = logger
-        self._supported_types = []
-        self._types_support = []
 
 
-    def get_type_support(self, base_type):
-        if base_type not in self._supported_types:
-            # self._logger.debug("Factory creates a new type support for {}".format(base_type))
 
-            self._supported_types.append( base_type)
-            t = self.make_type_support(base_type)
-            self._types_support.append( t)
-            return t
-        else:
-            return self._types_support[ self._supported_types.index( base_type)]
-
-    def make_type_support(self, base_type):
-        raise NotImplementedError()
-
-
-class TypeSupportFactory(AbstractTypeSupportFactory):
-
-    def __init__( self, type_support_class : TypeSupport, logger : logging.Logger = _default_logger):
-        assert type( type_support_class) == type
-        super().__init__( logger)
-        self._type_support_class = type_support_class
-
-    def make_type_support(self, base_type):
-        self._logger.debug("TypeSupportFactory : trying to make a '{}' with a '{}'".format(self._type_support_class, base_type))
-        return self._type_support_class( base_type)
-
-
-def sqla_attribute_analysis( model, logger : logging.Logger = _default_logger):
-    #default_logger.debug("Analysing model {}".format(model))
-
-
-    # print("-"*80)
-    # for prop in inspect(model).iterate_properties:
-    #     if isinstance(prop, ColumnProperty):
-    #         print( type(prop.columns[0].type))
-    #         print( type( inspect( getattr(model, prop.key))))
-
-    # Warning ! Some column properties are read only !
-    fnames = [prop.key for prop in inspect(model).iterate_properties
-              if isinstance(prop, ColumnProperty) ]
-
-    ftypes = dict()
-    for fname in fnames:
-        t = inspect( getattr(model, fname)).type
-        # print( type( inspect( getattr(model, fname)).type))
-        ftypes[fname] = type(t)
-
-    # Python properties
-    python_props = [name for name,value in vars(model).items() if isinstance(value, property)]
-
-    for name,value in vars(model).items():
-        if isinstance(value, property):
-            getter_method = typing.get_type_hints(value.getter)
-            if 'return' in getter_method:
-                ftypes[name] = getter_method['return']
-            else:
-                ftypes[name] = "type unkown"
-
-
-    #print(ftypes)
-    single_rnames = dict()
-    rnames = dict()
-    for key, relation in inspect(model).relationships.items():
-
-        # From the relation, we retrieve the mapped class, that is
-        # the one written by the SQLA schema author (i.e. you :-))
-        mapped_class = relation.mapper.class_
-        # print( "Mapper class = {}".format(mapped_class))
-        # print( relation.argument.class_)
-        if relation.uselist == False:
-            single_rnames[key] = mapped_class
-        else:
-            rnames[key] = mapped_class
-
-    # Order is important to rebuild composite keys (I think, not tested so far).
-    # See SQLA comment for query.get operation :
-    # http://docs.sqlalchemy.org/en/rel_1_0/orm/query.html#sqlalchemy.orm.query.Query.get )
-    knames = [key.name for key in inspect(model).primary_key]
-
-    # logger.debug(
-    #     "For model {}, I have these attributes : primary keys={}, fields={}, realtionships={} (single: {})".format(
-    #         model, knames, fnames, rnames, single_rnames))
-
-    return ( ftypes, rnames, single_rnames, knames)
-
-def make_cache_base_name( source_ts : TypeSupport, dest_ts : TypeSupport):
-    return "{}_{}".format( source_ts.type_name(), dest_ts.type_name())
-
-
-def extract_key_tuple( key_fields, cache_base_name, type_support : TypeSupport, instance_name):
-    """Build code that builds a tuple containing the key fields values of
-    an instance
-
-    """
-
-    assert type(key_fields) == list and len(key_fields) > 0, "Wrong keys : {}".format( key_fields)
-    assert isinstance( type_support, TypeSupport)
-    assert type(instance_name) == str and len(instance_name) > 0
-
-    key_parts_extractors = []
-    if cache_base_name:
-        key_parts_extractors.append( "'{}'".format(cache_base_name))
-
-    for k_name in key_fields:
-        key_parts_extractors.append( type_support.gen_read_field( instance_name, k_name))
-
-    return "({},)".format( ",".join(key_parts_extractors))
 
 
 
@@ -587,14 +264,14 @@ class SQLAWalker:
                                 serializer_name=serializer_name,
                                 additional_parameters=dest_type_support.serializer_additional_parameters())
 
-        self._logger.debug("Registering serializer {} {}".format(source_type_support, serializer.func_name()))
+        self._logger.info("Registering serializer {}( {} ...) -> {}".format(serializer.func_name(), source_type_support, dest_type_support))
 
         if serializer.func_name() in serializers:
             raise Exception("Looks like you define the same serializer twice : from {} to {} following a schema defined by {} (serializer function is '{}'(...)). Maybe you should use qualify the name further (using series name)".format( serializer.source_type_support, serializer.destination_type_support, serializer.base_type_name, serializer.func_name()))
 
         serializers[ serializer.func_name() ] = serializer
 
-        fields, relations, single_rnames, knames = sqla_attribute_analysis(base_type)
+        fields, relations, single_rnames, knames, props = sqla_attribute_analysis(base_type)
 
         # --- INSTANCE MANAGEMENT ---------------------------------------------
 
@@ -688,9 +365,41 @@ class SQLAWalker:
         # Some sanity check
 
         for name in fields_control: # Bug! this should look at relations only
-            if (name not in relations) and (name not in single_rnames) and (name not in fields_names) and (name in fields_control and type(fields_control[name]) != CodeWriter):
-                raise Exception("The relation or field {}.{} you use in a field control doesn't exist. We know these : {}.".format( base_type.__name__, name, ','.join( list(relations.keys()) + list(single_rnames.keys()))))
+            if (name not in relations) and (name not in single_rnames) and (name not in fields_names) and (name in fields_control and (name not in props) and type(fields_control[name]) != CodeWriter):
+                self._logger.warn("The relation or field or property {}.{} you use in a field control doesn't exist. We know these : {}.".format( base_type.__name__, name, ','.join( list(relations.keys()) + list(single_rnames.keys()))))
 
+        # --- PYTHON PROPERTIES ------------------------------------------------
+
+        for prop_name in props:
+            if prop_name in fields_control:
+                prop_model = fields_control[prop_name]
+
+                if prop_model == SKIP:
+                    serializer.append_code("# Skipped python property {} (has skip)".format( prop_name))
+                    continue
+                elif 'LIST' in prop_model:
+
+                    # Properties as list
+
+                    relation_serializer = prop_model['LIST']
+                    rel_source_type_support = relation_serializer.source_type_support
+                    rel_destination_type_support = relation_serializer.destination_type_support
+                    serializer_code = relation_serializer.call_code( rel_destination_type_support.serializer_additional_parameters())
+
+                    self._logger.debug("walker: in {} ({}), using a serializer for a property '{}', converting {} -> {}".format( base_type, source_type_support, prop_name, relation_serializer.source_type_support, relation_serializer.destination_type_support))
+
+                    rel_destination_type_support.sequence_copy(
+                        serializer, "source", "dest", prop_name,
+                        source_type_support, dest_type_support,
+                        rel_source_type_support,
+                        serializer_code,
+                        None,
+                        make_cache_base_name(source_type_support, dest_type_support))
+
+                else:
+                    raise Exception("The property {}.{} is not well modelled in the field controls".format( base_type, prop_name))
+            else:
+                serializer.append_code("# Skipped python property {} (not in field control)".format( prop_name))
 
         # --- RELATIONS represented as single item ----------------------------
 
@@ -970,7 +679,7 @@ class SQLAAutoGen:
             serializers_made = False
             for base_type, fields_control in do_now.items():
                 fc = dict(fields_control) # shallow copy !
-                ftypes, rnames, single_rnames, knames = sqla_attribute_analysis( base_type)
+                ftypes, rnames, single_rnames, knames, props = sqla_attribute_analysis( base_type)
 
                 # Recurse down the base_type (SQLAlchemy model)
 
@@ -979,6 +688,26 @@ class SQLAAutoGen:
                 # he wants us to analyze.
 
                 has_unsatisfied_deps = False
+
+                for prop_name in props:
+                    if prop_name in fields_control:
+                        prop_model = fields_control[prop_name]
+
+                        self._logger.debug( prop_model)
+
+                        if prop_model == SKIP:
+                            continue
+                        elif 'LIST' in prop_model:
+                            # There are several aspects :
+                            # * The fact it's a list of something
+                            # * The fact this list may only be read by some TypeSupport
+                            #raise Exception("zulu")
+                            #pass
+                            fc[prop_name] = { 'LIST' : serializers[ (prop_model['LIST'], series_name) ] }
+                        else:
+                            raise Exception("The property {}.{} is not well modelled in the field controls".format( base_type, prop_name))
+
+
                 for relation_name in merge_dicts( rnames, single_rnames):
 
                     # Did the user request to skip this relation ?
@@ -991,7 +720,7 @@ class SQLAAutoGen:
                     relation_target = inspect(relation).mapper.class_
 
                     if relation_target not in models_fc:
-                        raise Exception("For relation {}.{}, I don't know what to do with its target type : {}. You must skip that relation or tell me about its target type in the fields controls.".format( base_type, relation_name, relation_target))
+                        raise Exception("{} For relation {}.{}, I don't know what to do with its target type : {}. You must skip that relation or tell me about its target type in the fields controls.".format( (series_name and "In series '{}',".format(series_name)) or "", base_type, relation_name, relation_target))
 
                     self._logger.debug("Analyzing, in series '{}' of '{}', relation '{}' of type '{}'".format(
                         series_name, base_type, relation_name, relation_target))
@@ -1039,7 +768,7 @@ class SQLAAutoGen:
                     serializers[ (base_type, series_name) ] = self._make_serializer( base_type, fc, series_name)
                     serializers_made = True
                 else:
-                    # Some relationsipfs of the SQLA model have no
+                    # Some relationships of the SQLA model have no
                     # corresponding serializer. This means that we'll
                     # have to build serializers for other models
                     # (hoping to find the missing one) So we now
@@ -1070,25 +799,3 @@ class SQLAAutoGen:
     @property
     def serializers(self):
         return list( self._serializers.values())
-
-def find_sqla_mappers( mapper : 'class'):
-    base_mapper_direct_children = [sc for sc in mapper.__subclasses__()]
-
-    d = dict()
-
-    for direct_child in base_mapper_direct_children:
-        for c in _find_subclasses( direct_child):
-            d[c] = {}
-
-    return d
-
-def _find_subclasses( cls):
-    # Handle SQLA inherited entities definitions
-
-    if cls.__subclasses__():
-        results = [ cls ]
-        for sc in cls.__subclasses__():
-            results.extend( _find_subclasses(sc))
-        return results
-    else:
-        return [cls]
