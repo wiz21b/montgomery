@@ -5,7 +5,7 @@ import logging
 from unittest import skip
 from pprint import pprint, PrettyPrinter
 
-from pyxfer.pyxfer import SQLAWalker, SKIP, generated_code, SQLAAutoGen, find_sqla_mappers
+from pyxfer.pyxfer import SQLAWalker, SKIP, generated_code, SQLAAutoGen
 from pyxfer.type_support import SQLADictTypeSupport, SQLATypeSupport, ObjectTypeSupport
 
 logging.getLogger("pyxfer").setLevel(logging.DEBUG)
@@ -51,6 +51,28 @@ class OrderPart(MapperBase):
 
 
 
+
+def find_sqla_mappers( mapper : 'class'):
+    base_mapper_direct_children = [sc for sc in mapper.__subclasses__()]
+
+    d = dict()
+
+    for direct_child in base_mapper_direct_children:
+        for c in _find_subclasses( direct_child):
+            d[c] = {}
+
+    return d
+
+def _find_subclasses( cls):
+    # Handle SQLA inherited entities definitions
+
+    if cls.__subclasses__():
+        results = [ cls ]
+        for sc in cls.__subclasses__():
+            results.extend( _find_subclasses(sc))
+        return results
+    else:
+        return [cls]
 
 
 engine = create_engine("sqlite:///:memory:")
