@@ -79,7 +79,7 @@ setuptools.setup(
     author_email="schampailler@skynet.be",
     python_requires='~=3.6',
     packages=['pyxfer'],
-    install_requires=['sqlalchemy>=1.0.0, <1.1.0'],
+    install_requires=['sqlalchemy>=1.1.0, <1.2.0'],
     classifiers=['Programming Language :: Python :: 3.6',
                  'Development Status :: 3 - Alpha',
                  'Topic :: Software Development :: Code Generators']
