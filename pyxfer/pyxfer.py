@@ -6,11 +6,12 @@ from pyxfer.utils import sqla_attribute_analysis, _default_logger,  CodeWriter, 
 from pyxfer.type_support import TypeSupport, TypeSupportFactory
 
 SKIP = "!skip"
+COPY = "copy"
 USE = "use"
 CLEAR_APPEND = "by append"
 REPLACE = "by index"
 FACTORY = "FACTORY"
-
+LIST = "LIST"
 
 
 
@@ -308,6 +309,7 @@ class SQLAWalker:
 
         for field in sorted(list(fields_names)):
             if field in knames:
+                # Keys will have a special treatment, see below.
                 continue
             elif field in fields_control and fields_control[field] == SKIP:
                 serializer.append_code("# Skipped field {}".format(field))
@@ -370,13 +372,18 @@ class SQLAWalker:
 
         # --- PYTHON PROPERTIES ------------------------------------------------
 
+        properties_to_copy = []
+
         for prop_name in props:
             if prop_name in fields_control:
                 prop_model = fields_control[prop_name]
 
                 if prop_model == SKIP:
                     serializer.append_code("# Skipped python property {} (has skip)".format( prop_name))
-                    continue
+
+                elif prop_model == COPY:
+                    properties_to_copy.append( prop_name)
+
                 elif 'LIST' in prop_model:
 
                     # Properties as list
@@ -400,6 +407,11 @@ class SQLAWalker:
                     raise Exception("The property {}.{} is not well modelled in the field controls".format( base_type, prop_name))
             else:
                 serializer.append_code("# Skipped python property {} (not in field control)".format( prop_name))
+
+        if properties_to_copy:
+            serializer.append_blank()
+            serializer.append_code("# Properties copied without transformation")
+            self._field_copy( serializer, source_type_support, source_instance, dest_type_support, dest_instance, properties_to_copy)
 
         # --- RELATIONS represented as single item ----------------------------
 
@@ -434,11 +446,11 @@ class SQLAWalker:
                 serializer_code = relation_serializer.call_code(
                     relation_serializer.destination_type_support.serializer_additional_parameters())
 
-                serializer.append_code("{} = {}".format(
-                    dest_type_support.gen_read_field("dest", relation_name),
-                    serializer_code(
-                        source_type_support.gen_read_field("source", relation_name),
-                        None)))
+                serializer.append_code(
+                    dest_type_support.gen_write_field(
+                        "dest", relation_name, serializer_code(
+                            source_type_support.gen_read_field("source", relation_name),
+                            None)))
 
                 serializer.indent_left()
 
@@ -695,15 +707,22 @@ class SQLAAutoGen:
 
                         self._logger.debug( prop_model)
 
-                        if prop_model == SKIP:
-                            continue
+                        if prop_model in ( SKIP, COPY):
+                            fc[prop_name] = prop_model
+
                         elif 'LIST' in prop_model:
+
+                            class_model = prop_model['LIST']
+
+                            if not class_model:
+                                raise Exception( "I expect a model class for property '{}' because it's described as LIST".format(prop_name))
+
                             # There are several aspects :
                             # * The fact it's a list of something
                             # * The fact this list may only be read by some TypeSupport
                             #raise Exception("zulu")
                             #pass
-                            fc[prop_name] = { 'LIST' : serializers[ (prop_model['LIST'], series_name) ] }
+                            fc[prop_name] = { 'LIST' : serializers[ (class_model, series_name) ] }
                         else:
                             raise Exception("The property {}.{} is not well modelled in the field controls".format( base_type, prop_name))
 
