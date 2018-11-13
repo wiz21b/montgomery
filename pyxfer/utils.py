@@ -16,7 +16,7 @@ def _make_default_logger() -> logging.Logger:
 
 _default_logger = _make_default_logger()
 # Use this to enable logging in a clean way :
-logging.getLogger("pyxfer").setLevel(logging.DEBUG)
+#logging.getLogger("pyxfer").setLevel(logging.DEBUG)
 
 _sqla_attribute_analysis_cache = dict()
 
@@ -104,28 +104,6 @@ def sqla_attribute_analysis( model, logger : logging.Logger = _default_logger):
     return ( ftypes, rnames, single_rnames, knames, python_props)
 
 
-
-def find_sqla_mappers( mapper : 'class'):
-    base_mapper_direct_children = [sc for sc in mapper.__subclasses__()]
-
-    d = dict()
-
-    for direct_child in base_mapper_direct_children:
-        for c in _find_subclasses( direct_child):
-            d[c] = {}
-
-    return d
-
-def _find_subclasses( cls):
-    # Handle SQLA inherited entities definitions
-
-    if cls.__subclasses__():
-        results = [ cls ]
-        for sc in cls.__subclasses__():
-            results.extend( _find_subclasses(sc))
-        return results
-    else:
-        return [cls]
 
 
 class CodeWriter:
