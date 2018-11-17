@@ -1,15 +1,27 @@
+import typing
 import logging
-import colorlog
+
+_color_log_imported = False
+try:
+    from colorlog import ColoredFormatter
+    # I use this variable to avoid importing sys.
+    _color_log_imported = True
+except ImportError as ex:
+    pass
+
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import ColumnProperty
-import typing
 
 def _make_default_logger() -> logging.Logger:
     # Func to hide local values
     default_logger = logging.getLogger( "pyxfer") # FIXME shoudl use __name__, but it returns pyxfer.pyxfer
     log_handler = logging.StreamHandler()
-    #log_handler.setFormatter( logging.Formatter("[%(name)s %(asctime)s %(levelname)s] %(message)s"))
-    log_handler.setFormatter( colorlog.ColoredFormatter("[%(log_color)s%(name)s %(asctime)s %(levelname)s] %(message)s%(reset)s"))
+
+    if _color_log_imported:
+        log_handler.setFormatter( ColoredFormatter("[%(log_color)s%(name)s %(asctime)s %(levelname)s] %(message)s%(reset)s"))
+    else:
+        log_handler.setFormatter( logging.Formatter("[%(name)s %(asctime)s %(levelname)s] %(message)s"))
+
     default_logger.addHandler( log_handler)
     default_logger.setLevel( logging.CRITICAL + 1) # Hides every logs by default
     return default_logger

@@ -5,7 +5,8 @@ import logging
 from unittest import skip
 from pprint import pprint, PrettyPrinter
 
-from pyxfer.pyxfer import SQLAWalker, SKIP, generated_code, SQLAAutoGen
+from pyxfer.pyxfer import SQLAWalker, SKIP, generated_code
+from pyxfer.sqla_autogen import SQLAAutoGen
 from pyxfer.type_support import SQLADictTypeSupport, SQLATypeSupport, ObjectTypeSupport
 
 logging.getLogger("pyxfer").setLevel(logging.DEBUG)
